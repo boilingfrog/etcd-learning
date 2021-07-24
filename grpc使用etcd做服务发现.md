@@ -444,7 +444,7 @@ type Builder interface {
 
 - Build方法：为给定目标创建一个新的resolver，当调用grpc.Dial()时执行；  
 
-- Scheme方法：返回此resolver支持的方案,可参考[Scheme定义](https://github.com/boilingfrog/etcd-learning/tree/main/discovery)  
+- Scheme方法：返回此resolver支持的方案,可参考[Scheme定义](https://github.com/grpc/grpc/blob/master/doc/naming.md)  
 
 ```go
 // 监视指定目标的更新，包括地址更新和服务配置更新
