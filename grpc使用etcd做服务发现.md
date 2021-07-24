@@ -3,9 +3,9 @@
 
 - [etcd服务发现源码实现](#etcd%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0%E6%BA%90%E7%A0%81%E5%AE%9E%E7%8E%B0)
   - [前言](#%E5%89%8D%E8%A8%80)
-  - [分析下源码](#%E5%88%86%E6%9E%90%E4%B8%8B%E6%BA%90%E7%A0%81)
-    - [服务注册](#%E6%9C%8D%E5%8A%A1%E6%B3%A8%E5%86%8C)
-    - [服务发现](#%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0)
+  - [服务注册](#%E6%9C%8D%E5%8A%A1%E6%B3%A8%E5%86%8C)
+  - [服务发现](#%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0)
+  - [负载均衡](#%E8%B4%9F%E8%BD%BD%E5%9D%87%E8%A1%A1)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -15,11 +15,10 @@
 
 项目中使用etcd实现了grpc的服务户注册和服务发现，这里来看下如何实现的额服务注册和服务发现  
 
-### 分析下源码
 
 先来看下使用的demo  
 
-#### 服务注册  
+### 服务注册  
 
 ```go
 package discovery
@@ -430,7 +429,7 @@ func (l *lessor) Revoke(ctx context.Context, id LeaseID) (*LeaseRevokeResponse, 
 
 6、Revoke撤销一个租约，所有附加到租约的key将过期并被删除。  
 
-#### 服务发现  
+### 服务发现  
 
 我们只需实现grpc在resolver中提供了Builder和Resolver接口，就能完成gRPC客户端的服务发现和负载均衡  
 
@@ -633,3 +632,118 @@ func (r *Resolver) sync() error {
 2、sync会定时的同步etcd中的可用的服务地址到srvAddrsList中；  
 
 3、使用UpdateState更新ClientConn的Addresses。   
+
+这里使用gRPC内置的负载均衡策略`round_robin`，根据负载均衡地址，以轮询的方式进行调用服务，来测试下服务的发现和简单的服务负载  
+
+```go
+package discovery
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"testing"
+	"time"
+
+	"go.uber.org/zap"
+	"google.golang.org/grpc/balancer/roundrobin"
+	"google.golang.org/grpc/resolver"
+
+	"etcd-learning/discovery/helloworld"
+
+	"google.golang.org/grpc"
+)
+
+var etcdAddrs = []string{"127.0.0.1:2379"}
+
+func TestResolver(t *testing.T) {
+	r := NewResolver(etcdAddrs, zap.NewNop())
+	resolver.Register(r)
+
+	// etcd中注册5个服务
+	go newServer(t, ":1001", "1.0.0", 1)
+	go newServer(t, ":1002", "1.0.0", 1)
+	go newServer(t, ":1003", "1.0.0", 1)
+	go newServer(t, ":1004", "1.0.0", 1)
+	go newServer(t, ":1006", "1.0.0", 10)
+
+	conn, err := grpc.Dial("etcd:///hello", grpc.WithInsecure(), grpc.WithBalancerName(roundrobin.Name))
+	if err != nil {
+		t.Fatalf("failed to dial %v", err)
+	}
+	defer conn.Close()
+
+	c := helloworld.NewGreeterClient(conn)
+
+	// 进行十次数据请求
+	for i := 0; i < 10; i++ {
+		resp, err := c.SayHello(context.Background(), &helloworld.HelloRequest{Name: "abc"})
+		if err != nil {
+			t.Fatalf("say hello failed %v", err)
+		}
+		log.Println(resp.Message)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	time.Sleep(10 * time.Second)
+}
+
+type server struct {
+	Port string
+}
+
+// SayHello implements helloworld.GreeterServer
+func (s *server) SayHello(ctx context.Context, in *helloworld.HelloRequest) (*helloworld.HelloReply, error) {
+	return &helloworld.HelloReply{Message: fmt.Sprintf("Hello From %s", s.Port)}, nil
+}
+
+func newServer(t *testing.T, port string, version string, weight int64) {
+	register := NewRegister(etcdAddrs, zap.NewNop())
+	defer register.Stop()
+
+	listen, err := net.Listen("tcp", port)
+	if err != nil {
+		log.Fatalf("failed to listen %v", err)
+	}
+
+	s := grpc.NewServer()
+	helloworld.RegisterGreeterServer(s, &server{Port: port})
+
+	info := Server{
+		Name:    "hello",
+		Addr:    fmt.Sprintf("127.0.0.1%s", port),
+		Version: version,
+		Weight:  weight,
+	}
+
+	register.Register(info, 10)
+
+	if err := s.Serve(listen); err != nil {
+		log.Fatalf("failed to server %v", err)
+	}
+}
+```
+
+这里注册了5个服务，端口号是1001到1006，循环调用10次   
+
+```go
+=== RUN   TestResolver
+2021/07/24 22:44:52 Hello From :1001
+2021/07/24 22:44:52 Hello From :1006
+2021/07/24 22:44:53 Hello From :1001
+2021/07/24 22:44:53 Hello From :1002
+2021/07/24 22:44:53 Hello From :1003
+2021/07/24 22:44:53 Hello From :1004
+2021/07/24 22:44:53 Hello From :1006
+2021/07/24 22:44:53 Hello From :1001
+2021/07/24 22:44:53 Hello From :1002
+2021/07/24 22:44:53 Hello From :1003
+```
+
+发现每次的请求会发送到不同的服务中   
+
+
+### 负载均衡
+
+
