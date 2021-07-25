@@ -1,7 +1,7 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-- [etcd服务发现源码实现](#etcd%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0%E6%BA%90%E7%A0%81%E5%AE%9E%E7%8E%B0)
+- [grpc通过etcd实现服务发现](#grpc%E9%80%9A%E8%BF%87etcd%E5%AE%9E%E7%8E%B0%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0)
   - [前言](#%E5%89%8D%E8%A8%80)
   - [服务注册](#%E6%9C%8D%E5%8A%A1%E6%B3%A8%E5%86%8C)
   - [服务发现](#%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0)
@@ -13,7 +13,7 @@
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-## etcd服务发现源码实现
+## grpc通过etcd实现服务发现
 
 ### 前言
 
