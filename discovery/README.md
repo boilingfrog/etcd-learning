@@ -636,7 +636,9 @@ func (r *Resolver) sync() error {
 
 2、sync会定时的同步etcd中的可用的服务地址到srvAddrsList中；  
 
-3、使用UpdateState更新ClientConn的Addresses。   
+3、使用UpdateState更新ClientConn的Addresses；      
+
+4、然后grpc客户端就能根据配置的具体策略发送请求到grpc的server中。  
 
 这里使用gRPC内置的负载均衡策略`round_robin`，根据负载均衡地址，以轮询的方式进行调用服务，来测试下服务的发现和简单的服务负载  
 
