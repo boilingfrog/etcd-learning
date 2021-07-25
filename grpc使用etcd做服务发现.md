@@ -6,6 +6,10 @@
   - [服务注册](#%E6%9C%8D%E5%8A%A1%E6%B3%A8%E5%86%8C)
   - [服务发现](#%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0)
   - [负载均衡](#%E8%B4%9F%E8%BD%BD%E5%9D%87%E8%A1%A1)
+    - [集中式LB（Proxy Model）](#%E9%9B%86%E4%B8%AD%E5%BC%8Flbproxy-model)
+    - [进程内LB（Balancing-aware Client）](#%E8%BF%9B%E7%A8%8B%E5%86%85lbbalancing-aware-client)
+    - [独立 LB 进程（External Load Balancing Service）](#%E7%8B%AC%E7%AB%8B-lb-%E8%BF%9B%E7%A8%8Bexternal-load-balancing-service)
+  - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -746,4 +750,42 @@ func newServer(t *testing.T, port string, version string, weight int64) {
 
 ### 负载均衡
 
+#### 集中式LB（Proxy Model）  
 
+<img src="/img/grpc_balance_1.png" alt="grpc" align=center/>
+
+在服务消费者和服务提供者之间有一个独立的LB，通常是专门的硬件设备如 F5，或者基于软件如`LVS`，`HAproxy`等实现。LB上有所有服务的地址映射表，通常由运维配置注册，当服务消费方调用某个目标服务时，它向LB发起请求，由LB以某种策略，比如轮询`（Round-Robin）`做负载均衡后将请求转发到目标服务。LB一般具备健康检查能力，能自动摘除不健康的服务实例。  
+
+该方案主要问题：  
+
+1、单点问题，所有服务调用流量都经过LB，当服务数量和调用量大的时候，LB容易成为瓶颈，且一旦LB发生故障影响整个系统；  
+
+2、服务消费方、提供方之间增加了一级，有一定性能开销。  
+
+#### 进程内LB（Balancing-aware Client）   
+
+<img src="/img/grpc_balance_2.png" alt="grpc" align=center/>
+
+针对第一个方案的不足，此方案将LB的功能集成到服务消费方进程里，也被称为软负载或者客户端负载方案。服务提供方启动时，首先将服务地址注册到服务注册表，同时定期报心跳到服务注册表以表明服务的存活状态，相当于健康检查，服务消费方要访问某个服务时，它通过内置的LB组件向服务注册表查询，同时缓存并定期刷新目标服务地址列表，然后以某种负载均衡策略选择一个目标服务地址，最后向目标服务发起请求。LB和服务发现能力被分散到每一个服务消费者的进程内部，同时服务消费方和服务提供方之间是直接调用，没有额外开销，性能比较好。  
+
+该方案主要问题：  
+
+1、开发成本，该方案将服务调用方集成到客户端的进程里头，如果有多种不同的语言栈，就要配合开发多种不同的客户端，有一定的研发和维护成本；  
+
+2、另外生产环境中，后续如果要对客户库进行升级，势必要求服务调用方修改代码并重新发布，升级较复杂。  
+
+#### 独立 LB 进程（External Load Balancing Service）  
+
+<img src="/img/grpc_balance_3.png" alt="grpc" align=center/>
+
+该方案是针对第二种方案的不足而提出的一种折中方案，原理和第二种方案基本类似。  
+
+不同之处是将LB和服务发现功能从进程内移出来，变成主机上的一个独立进程。主机上的一个或者多个服务要访问目标服务时，他们都通过同一主机上的独立LB进程做服务发现和负载均衡。该方案也是一种分布式方案没有单点问题，一个LB进程挂了只影响该主机上的服务调用方，服务调用方和LB之间是进程内调用性能好，同时该方案还简化了服务调用方，不需要为不同语言开发客户库，LB的升级不需要服务调用方改代码。  
+
+该方案主要问题：部署较复杂，环节多，出错调试排查问题不方便。  
+
+上面通过etcd实现服务发现，使用的及时第二种 进程内LB（Balancing-aware Client）。   
+
+### 参考  
+
+【Load Balancing in gRPC】https://github.com/grpc/grpc/blob/master/doc/load-balancing.md  
