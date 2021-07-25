@@ -17,10 +17,9 @@
 
 ### 前言
 
-项目中使用etcd实现了grpc的服务户注册和服务发现，这里来看下如何实现的额服务注册和服务发现  
+项目中使用etcd实现了grpc的服务户注册和服务发现，这里来看下如何实现的服务注册和服务发现  
 
-
-先来看下使用的demo  
+先来看下使用的demo，demo中的代码[discovery](https://github.com/boilingfrog/etcd-learning/tree/main/discovery)
 
 ### 服务注册  
 
@@ -199,6 +198,8 @@ func (r *Register) GetServerInfo() (Server, error) {
 	return info, nil
 }
 ```
+
+来分析下上面的代码实现  
 
 当启动一个grpc的时候我们注册到etcd中
 
@@ -789,3 +790,4 @@ func newServer(t *testing.T, port string, version string, weight int64) {
 ### 参考  
 
 【Load Balancing in gRPC】https://github.com/grpc/grpc/blob/master/doc/load-balancing.md  
+【文中的代码示例】https://github.com/boilingfrog/etcd-learning/tree/main/discovery    
