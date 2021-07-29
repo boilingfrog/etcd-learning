@@ -1,3 +1,19 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+
+- [etcd的搭建](#etcd%E7%9A%84%E6%90%AD%E5%BB%BA)
+  - [前言](#%E5%89%8D%E8%A8%80)
+  - [单机](#%E5%8D%95%E6%9C%BA)
+  - [集群](#%E9%9B%86%E7%BE%A4)
+    - [创建etcd配置文件](#%E5%88%9B%E5%BB%BAetcd%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6)
+    - [更新etcd系统默认配置](#%E6%9B%B4%E6%96%B0etcd%E7%B3%BB%E7%BB%9F%E9%BB%98%E8%AE%A4%E9%85%8D%E7%BD%AE)
+    - [创建etcd配置文件：](#%E5%88%9B%E5%BB%BAetcd%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6)
+    - [启动命令：](#%E5%90%AF%E5%8A%A8%E5%91%BD%E4%BB%A4)
+  - [参考](#%E5%8F%82%E8%80%83)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 ## etcd的搭建
 
 ### 前言  
@@ -74,7 +90,7 @@ rm -f /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
 ...
 ```
 
-创建etcd配置文件   
+#### 创建etcd配置文件   
 
 `$ vi /etc/etcd/conf.yml`   
 
@@ -82,21 +98,13 @@ rm -f /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
 
 ```
 name: etcd-1
-
 data-dir: /opt/etcd/data
-
 listen-client-urls: http://192.168.56.111:2379,http://127.0.0.1:2379
-
 advertise-client-urls: http://192.168.56.111:2379,http://127.0.0.1:2379
-
 listen-peer-urls: http://192.168.56.111:2380
-
 initial-advertise-peer-urls: http://192.168.56.111:2380
-
 initial-cluster: etcd-1=http://192.168.56.111:2380,etcd-2=http://192.168.56.112:2380,etcd-3=http://192.168.56.113:2380
-
 initial-cluster-token: etcd-cluster-token
-
 initial-cluster-state: new
 ```
 
@@ -104,21 +112,13 @@ initial-cluster-state: new
 
 ```
 name: etcd-2
-
 data-dir: /opt/etcd/data
-
 listen-client-urls: http://192.168.56.112:2379,http://127.0.0.1:2379
-
 advertise-client-urls: http://192.168.56.112:2379,http://127.0.0.1:2379
-
 listen-peer-urls: http://192.168.56.112:2380
-
 initial-advertise-peer-urls: http://192.168.56.112:2380
-
 initial-cluster: etcd-1=http://192.168.56.111:2380,etcd-2=http://192.168.56.112:2380,etcd-3=http://192.168.56.113:2380
-
 initial-cluster-token: etcd-cluster-token
-
 initial-cluster-state: new
 ```
 
@@ -126,37 +126,79 @@ initial-cluster-state: new
 
 ```
 name: etcd-3
-
 data-dir: /opt/etcd/data
-
 listen-client-urls: http://192.168.56.113:2379,http://127.0.0.1:2379
-
 advertise-client-urls: http://192.168.56.113:2379,http://127.0.0.1:2379
-
 listen-peer-urls: http://192.168.56.113:2380
-
 initial-advertise-peer-urls: http://192.168.56.113:2380
-
 initial-cluster: etcd-1=http://192.168.56.111:2380,etcd-2=http://192.168.56.112:2380,etcd-3=http://192.168.56.113:2380
-
 initial-cluster-token: etcd-cluster-token
-
 initial-cluster-state: new
 ```
 
-更新etcd系统默认配置  
+#### 更新etcd系统默认配置  
 
 当前使用的是etcd v3版本，系统默认的是v2，通过下面命令修改配置。  
 
-`
+```
 $ vi /etc/profile
 # 在末尾追加  
 export ETCDCTL_API=3
 # 然后更新
 $ source /etc/profile
-`
+```
 
-启动命令  
+#### 创建etcd配置文件：
+
+```
+$ cd /opt/etcd-v3.2.6
+$ ./etcdctl version
+etcdctl version: 3.2.6
+API version: 3.2
+```
+
+#### 启动命令：
+
+```
+$ ./etcd --config-file=/etc/etcd/conf.yml
+```
+
+#### 配置ETCD为启动服务
+
+编辑/usr/lib/systemd/system/etcd.service  
+
+```
+# cat /usr/lib/systemd/system/etcd.service
+[Unit]
+Description=EtcdServer
+After=network.target
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+WorkingDirectory=/opt/etcd/
+# User=etcd
+ExecStart=/opt/etcd/etcd --config-file=/etc/etcd/conf.yml
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+
+更新启动：  
+
+```
+# systemctl daemon-reload
+# systemctl enable etcd
+# systemctl start etcd
+# systemctl restart etcd
+
+# systemctl status etcd.service -l
+```
+
+
 
 
 
