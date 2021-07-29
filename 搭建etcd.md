@@ -7,7 +7,6 @@
   - [集群](#%E9%9B%86%E7%BE%A4)
     - [创建etcd配置文件](#%E5%88%9B%E5%BB%BAetcd%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6)
     - [更新etcd系统默认配置](#%E6%9B%B4%E6%96%B0etcd%E7%B3%BB%E7%BB%9F%E9%BB%98%E8%AE%A4%E9%85%8D%E7%BD%AE)
-    - [创建etcd配置文件](#%E5%88%9B%E5%BB%BAetcd%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6-1)
     - [启动](#%E5%90%AF%E5%8A%A8)
     - [配置ETCD为启动服务](#%E9%85%8D%E7%BD%AEetcd%E4%B8%BA%E5%90%AF%E5%8A%A8%E6%9C%8D%E5%8A%A1)
   - [测试下](#%E6%B5%8B%E8%AF%95%E4%B8%8B)
@@ -158,15 +157,6 @@ export ETCDCTL_API=3
 $ source /etc/profile
 ```
 
-#### 创建etcd配置文件
-
-```
-$ cd /opt/etcd-v3.2.6
-$ ./etcdctl version
-etcdctl version: 3.2.6
-API version: 3.2
-```
-
 #### 启动
 
 ```
@@ -209,6 +199,12 @@ $ systemctl status etcd.service -l
 ```
 
 ### 测试下  
+ 
+复制etcd二进制文件到`/usr/local/bin/`  
+
+```
+$ cp /opt/etcd/etcd* /usr/local/bin/
+```
 
 首先设置ETCD_ENDPOINTS  
 
