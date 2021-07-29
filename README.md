@@ -7,3 +7,6 @@
 
 [etcd学习(3)-grpc使用etcd做服务发现](https://www.cnblogs.com/ricklz/p/15059497.html)  
 
+[etcd学习(4)-centos7中部署etcd](https://www.cnblogs.com/ricklz/p/15074924.html)    
+
+
