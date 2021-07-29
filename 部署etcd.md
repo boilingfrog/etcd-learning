@@ -145,6 +145,24 @@ initial-cluster-token: etcd-cluster-token
 initial-cluster-state: new
 ```
 
+配置项说明：
+
+- --name：etcd集群中的节点名，这里可以随意，可区分且不重复就行   
+
+- --listen-peer-urls：监听的用于节点之间通信的url，可监听多个，集群内部将通过这些url进行数据交互(如选举，数据同步等)  
+
+- --initial-advertise-peer-urls：建议用于节点之间通信的url，节点间将以该值进行通信  
+
+- --listen-client-urls：监听的用于客户端通信的url，同样可以监听多个  
+
+- --advertise-client-urls：建议使用的客户端通信 url，该值用于 etcd 代理或 etcd 成员与 etcd 节点通信  
+
+- --initial-cluster-token： etcd-cluster-1，节点的 token 值，设置该值后集群将生成唯一 id，并为每个节点也生成唯一 id，当使用相同配置文件再启动一个集群时，只要该 token 值不一样，etcd 集群就不会相互影响  
+
+- --initial-cluster：也就是集群中所有的 initial-advertise-peer-urls 的合集  
+
+- --initial-cluster-state：new，新建集群的标志  
+
 #### 更新etcd系统默认配置  
 
 当前使用的是etcd v3版本，系统默认的是v2，通过下面命令修改配置。  
@@ -259,6 +277,8 @@ OK
 ### 参考  
 
 【ETCD集群安装配置】https://zhuanlan.zhihu.com/p/46477992    
+【Install】https://etcd.io/docs/v3.5/install/    
+【彻底搞懂 etcd 系列文章（三）：etcd 集群运维部署】https://developer.aliyun.com/article/765312  
 
 
 
