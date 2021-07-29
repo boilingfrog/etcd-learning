@@ -23,7 +23,7 @@
 
 ### 单机
 
-在etcd的releases中有安装脚本,[如何安装](https://github.com/etcd-io/etcd/releases)  
+在etcd的releases中有安装脚本,[安装脚本](https://github.com/etcd-io/etcd/releases)  
 
 这里放一个docker的安装脚本  
 
@@ -78,6 +78,11 @@ rm -rf /opt/etcd && mkdir -p /opt/etcd
 curl -L ${DOWNLOAD_URL}/${ETCD_VER}/etcd-${ETCD_VER}-linux-amd64.tar.gz -o /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
 tar xzvf /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz -C /opt/etcd --strip-components=1
 rm -f /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
+```
+
+赋予执行权限
+```
+# chmod +x etcd.sh
 ```
 
 在每台机器中都执行下    
