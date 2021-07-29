@@ -1,15 +1,16 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-
 - [etcd的搭建](#etcd%E7%9A%84%E6%90%AD%E5%BB%BA)
   - [前言](#%E5%89%8D%E8%A8%80)
   - [单机](#%E5%8D%95%E6%9C%BA)
   - [集群](#%E9%9B%86%E7%BE%A4)
     - [创建etcd配置文件](#%E5%88%9B%E5%BB%BAetcd%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6)
     - [更新etcd系统默认配置](#%E6%9B%B4%E6%96%B0etcd%E7%B3%BB%E7%BB%9F%E9%BB%98%E8%AE%A4%E9%85%8D%E7%BD%AE)
-    - [创建etcd配置文件：](#%E5%88%9B%E5%BB%BAetcd%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6)
-    - [启动命令：](#%E5%90%AF%E5%8A%A8%E5%91%BD%E4%BB%A4)
+    - [创建etcd配置文件](#%E5%88%9B%E5%BB%BAetcd%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6-1)
+    - [启动](#%E5%90%AF%E5%8A%A8)
+    - [配置ETCD为启动服务](#%E9%85%8D%E7%BD%AEetcd%E4%B8%BA%E5%90%AF%E5%8A%A8%E6%9C%8D%E5%8A%A1)
+  - [测试下](#%E6%B5%8B%E8%AF%95%E4%B8%8B)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -22,7 +23,7 @@
 
 ### 单机
 
-在etcd的releases中有安装脚本,[](https://github.com/etcd-io/etcd/releases)  
+在etcd的releases中有安装脚本,[如何安装](https://github.com/etcd-io/etcd/releases)  
 
 这里放一个docker的安装脚本  
 
@@ -55,7 +56,7 @@ rm -rf /tmp/etcd-data.tmp && mkdir -p /tmp/etcd-data.tmp && \
 这里准备了三台`centos7`机器    
 
 | 主机    | ip             |
-| ------ | ------          | 
+| ------ | ------         | 
 | etcd-1 | 192.168.56.111 |
 | etcd-2 | 192.168.56.112 |
 | etcd-3 | 192.168.56.113 |
@@ -148,7 +149,7 @@ export ETCDCTL_API=3
 $ source /etc/profile
 ```
 
-#### 创建etcd配置文件：
+#### 创建etcd配置文件
 
 ```
 $ cd /opt/etcd-v3.2.6
@@ -157,7 +158,7 @@ etcdctl version: 3.2.6
 API version: 3.2
 ```
 
-#### 启动命令：
+#### 启动
 
 ```
 $ ./etcd --config-file=/etc/etcd/conf.yml
@@ -198,10 +199,57 @@ WantedBy=multi-user.target
 # systemctl status etcd.service -l
 ```
 
+### 测试下  
 
+首先设置ETCD_ENDPOINTS  
 
+```
+# export ETCDCTL_API=3
+# export ETCD_ENDPOINTS=192.168.56.111:2379,192.168.56.112:2379,192.168.56.113:2379
+```
 
+查看状态  
 
+```
+# etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table member list
++------------------+---------+--------+----------------------------+--------------------------------------------------+------------+
+|        ID        | STATUS  |  NAME  |         PEER ADDRS         |                   CLIENT ADDRS                   | IS LEARNER |
++------------------+---------+--------+----------------------------+--------------------------------------------------+------------+
+|  90d224ceb3098d7 | started | etcd-2 | http://192.168.56.112:2380 | http://127.0.0.1:2379,http://192.168.56.112:2379 |      false |
+| 3b23fbb7d9c7cd10 | started | etcd-1 | http://192.168.56.111:2380 | http://127.0.0.1:2379,http://192.168.56.111:2379 |      false |
+| 7909c74e3f5ffafa | started | etcd-3 | http://192.168.56.113:2380 | http://127.0.0.1:2379,http://192.168.56.113:2379 |      false |
++------------------+---------+--------+----------------------------+--------------------------------------------------+------------+
+
+# etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table endpoint health
++---------------------+--------+------------+-------+
+|      ENDPOINT       | HEALTH |    TOOK    | ERROR |
++---------------------+--------+------------+-------+
+| 192.168.56.111:2379 |   true | 6.558088ms |       |
+| 192.168.56.113:2379 |   true | 6.543104ms |       |
+| 192.168.56.112:2379 |   true | 7.405801ms |       |
++---------------------+--------+------------+-------+
+
+# etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table endpoint status
++---------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+|      ENDPOINT       |        ID        | VERSION | DB SIZE | IS LEADER | IS LEARNER | RAFT TERM | RAFT INDEX | RAFT APPLIED INDEX | ERRORS |
++---------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+| 192.168.56.111:2379 | 3b23fbb7d9c7cd10 |   3.5.0 |   20 kB |      true |      false |         2 |         19 |                 19 |        |
+| 192.168.56.112:2379 |  90d224ceb3098d7 |   3.5.0 |   20 kB |     false |      false |         2 |         19 |                 19 |        |
+| 192.168.56.113:2379 | 7909c74e3f5ffafa |   3.5.0 |   20 kB |     false |      false |         2 |         19 |                 19 |        |
++---------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
+```
+
+在etcd-1中watch一个key,然后再etcd-2中对key设置一个值  
+
+```
+[root@centos7-1 ~]# etcdctl watch test
+PUT
+test
+xiaoming
+
+[root@centos7-3 ~]# etcdctl put test xiaoming
+OK
+```
 
 ### 参考  
 
