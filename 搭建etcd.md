@@ -64,7 +64,8 @@ rm -rf /tmp/etcd-data.tmp && mkdir -p /tmp/etcd-data.tmp && \
 首先在每台机器中安装etcd,这里写了安装的脚本  
 
 ```shell script
-# cat etcd.sh 
+$ cat etcd.sh 
+
 ETCD_VER=v3.5.0
 
 # choose either URL
@@ -82,13 +83,13 @@ rm -f /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
 
 赋予执行权限
 ```
-# chmod +x etcd.sh
+$ chmod +x etcd.sh
 ```
 
 在每台机器中都执行下    
 
 ```
-# ./etcd.sh
+$ ./etcd.sh
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
 100   636  100   636    0     0   1328      0 --:--:-- --:--:-- --:--:--  1330
@@ -98,7 +99,10 @@ rm -f /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
 
 #### 创建etcd配置文件   
 
-`$ vi /etc/etcd/conf.yml`   
+```
+$ mkdir /etc/etcd
+$ vi /etc/etcd/conf.yml
+```
 
 节点1  
 
@@ -174,7 +178,7 @@ $ ./etcd --config-file=/etc/etcd/conf.yml
 编辑/usr/lib/systemd/system/etcd.service  
 
 ```
-# cat /usr/lib/systemd/system/etcd.service
+$ cat /usr/lib/systemd/system/etcd.service
 [Unit]
 Description=EtcdServer
 After=network.target
@@ -196,12 +200,12 @@ WantedBy=multi-user.target
 更新启动：  
 
 ```
-# systemctl daemon-reload
-# systemctl enable etcd
-# systemctl start etcd
-# systemctl restart etcd
+$ systemctl daemon-reload
+$ systemctl enable etcd
+$ systemctl start etcd
+$ systemctl restart etcd
 
-# systemctl status etcd.service -l
+$ systemctl status etcd.service -l
 ```
 
 ### 测试下  
@@ -216,7 +220,7 @@ WantedBy=multi-user.target
 查看状态  
 
 ```
-# etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table member list
+$ etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table member list
 +------------------+---------+--------+----------------------------+--------------------------------------------------+------------+
 |        ID        | STATUS  |  NAME  |         PEER ADDRS         |                   CLIENT ADDRS                   | IS LEARNER |
 +------------------+---------+--------+----------------------------+--------------------------------------------------+------------+
@@ -225,7 +229,7 @@ WantedBy=multi-user.target
 | 7909c74e3f5ffafa | started | etcd-3 | http://192.168.56.113:2380 | http://127.0.0.1:2379,http://192.168.56.113:2379 |      false |
 +------------------+---------+--------+----------------------------+--------------------------------------------------+------------+
 
-# etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table endpoint health
+$ etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table endpoint health
 +---------------------+--------+------------+-------+
 |      ENDPOINT       | HEALTH |    TOOK    | ERROR |
 +---------------------+--------+------------+-------+
@@ -234,7 +238,7 @@ WantedBy=multi-user.target
 | 192.168.56.112:2379 |   true | 7.405801ms |       |
 +---------------------+--------+------------+-------+
 
-# etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table endpoint status
+$ etcdctl --endpoints=${ETCD_ENDPOINTS} --write-out=table endpoint status
 +---------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
 |      ENDPOINT       |        ID        | VERSION | DB SIZE | IS LEADER | IS LEARNER | RAFT TERM | RAFT INDEX | RAFT APPLIED INDEX | ERRORS |
 +---------------------+------------------+---------+---------+-----------+------------+-----------+------------+--------------------+--------+
