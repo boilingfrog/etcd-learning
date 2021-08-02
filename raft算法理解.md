@@ -6,6 +6,7 @@
     - [raft中的几种状态](#raft%E4%B8%AD%E7%9A%84%E5%87%A0%E7%A7%8D%E7%8A%B6%E6%80%81)
     - [任期](#%E4%BB%BB%E6%9C%9F)
     - [leader选举](#leader%E9%80%89%E4%B8%BE)
+    - [日志复制](#%E6%97%A5%E5%BF%97%E5%A4%8D%E5%88%B6)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -68,6 +69,19 @@ Raft将时间划分为任意长度的任期，每个任期都以一次选举开�
 
 来看下这个选举的随机算法：  
 
+1、为了阻止选票起初就被瓜分，选举超时时间是从一个固定的区间（例如 150-300 毫秒）随机选择；  
+
+2、这个选举超时时间就是follower要等待成为candidate的时间；  
+
+3、每一个候选人在开始一次选举的时候会重置一个随机超时的时间，也就是150-300中随机一个值；   
+
+4、这个时间结束之后follower变成candidate开始选举；  
+
+5、这样大大减少了选票被瓜分的情况，如何选票还是被瓜分，就继续从1开始选举。    
+
+#### 日志复制
+
+一旦leader被选举成功，就可以对客户端提供服务了。客户端提交每一条命令都会被按顺序记录到leader的日志中，每一条命令都包含term编号和顺序索引，然后向其他节点并行发送AppendEntries RPC用以复制命令(如果命令丢失会不断重发)，当复制成功也就是大多数节点成功复制后，leader就会提交命令，即执行该命令并且将执行结果返回客户端，raft保证已经提交的命令最终也会被其他节点成功执行。  
 
 
 
@@ -85,4 +99,6 @@ Raft将时间划分为任意长度的任期，每个任期都以一次选举开�
 【raft演示动画】https://raft.github.io/raftscope/index.html    
 【理解 raft 算法】https://sanyuesha.com/2019/04/18/raft/  
 【理解Raft一致性算法—一篇学术论文总结】https://mp.weixin.qq.com/s/RkMeYyUck1WQPjNiGvahKQ  
+【Raft协议原理详解】https://zhuanlan.zhihu.com/p/91288179  
+【Raft算法详解】https://zhuanlan.zhihu.com/p/32052223  
 
