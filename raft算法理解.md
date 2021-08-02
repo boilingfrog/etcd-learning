@@ -89,11 +89,39 @@ Raft将时间划分为任意长度的任期，每个任期都以一次选举开�
 
 2、然后leader将这些更改的请求发送到follower；  
 
-3、leader会等待大多数的follower确认提交之后，commit这些更改，然后通知客户端更新的结果；  
+3、leader等待大多数的follower确认提交；  
 
-4、同时leader会不断的尝试通知follower去存储所有更新的信息。  
+4、leader在等待大多数的follower确认提交之后，commit这些更改，然后通知客户端更新的结果；  
+
+5、同时leader会不断的尝试通知follower去存储所有更新的信息。  
 
 <img src="/img/raft-leader.png" alt="etcd" align=center/>
+
+日志由有序编号（log index）的日志条目组成。每个日志条目包含它被创建时的任期号（term），和用于状态机执行的命令。如果一个日志条目被复制到大多数服务器上，就被认为可以提交（commit）了。  
+
+<img src="/img/raft-log_1.png" alt="etcd" align=center/>
+
+Raft日志同步保证如下两点：  
+
+- 如果不同日志中的两个条目有着相同的索引和任期号，则它们所存储的命令是相同的；  
+
+- 如果不同日志中的两个条目有着相同的索引和任期号，则它们之前的所有条目都是完全一样的。  
+
+第一条特性源于Leader在一个term内在给定的一个log index最多创建一条日志条目，同时该条目在日志中的位置也从来不会改变。  
+
+第二条特性：Raft算法在发送日志复制请求时会携带前置日志的term和logIndex值（即 prevLogTerm 和 prevLogIndex），只有在 prevLogTerm 和 prevLogIndex 匹配的情况下才能成功响应请求。如果prevLogTerm和prevLogIndex不匹配，则说明当前节点可能是新加入的、或者之前服从于其它Leader，亦或当前节点之前是Leader节点。为了兑现承诺二，Leader节点需要与该Follower节点向前追溯找到term和logIndex匹配的那条日志，并使用Leader节点的日志强行覆盖该Follower此后的日志数据。  
+
+一般情况下，Leader和Followers的日志保持一致，因此AppendEntries一致性检查通常不会失败。然而，Leader崩溃可能会导致日志不一致：旧的Leader可能没有完全复制完日志中的所有条目。一个Follower可能会丢失掉Leader上的一些条目，也有可能包含一些Leader没有的条目，也有可能两者都会发生。丢失的或者多出来的条目可能会持续多个任期。  
+
+Leader通过强制Followers复制它的日志来处理日志的不一致，Followers上的不一致的日志会被Leader的日志覆盖。  
+
+Leader为了使Followers的日志同自己的一致，Leader需要找到Followers同它的日志一致的地方，然后覆盖Followers在该位置之后的条目。  
+
+Leader会从后往前试，每次AppendEntries失败后尝试前一个日志条目，直到成功找到每个Follower的日志一致位点，然后向后逐条覆盖Followers在该位置之后的条目。  
+
+
+
+
 
 
 
