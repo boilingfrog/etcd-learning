@@ -83,6 +83,18 @@ Raft将时间划分为任意长度的任期，每个任期都以一次选举开�
 
 一旦leader被选举成功，就可以对客户端提供服务了。客户端提交每一条命令都会被按顺序记录到leader的日志中，每一条命令都包含term编号和顺序索引，然后向其他节点并行发送AppendEntries RPC用以复制命令(如果命令丢失会不断重发)，当复制成功也就是大多数节点成功复制后，leader就会提交命令，即执行该命令并且将执行结果返回客户端，raft保证已经提交的命令最终也会被其他节点成功执行。  
 
+来看下是具体的流程：  
+
+1、所有的请求都先经过leader,每个请求首先以日志的形式保存在leader中，然后这时候日志的状态是uncommited状态；  
+
+2、然后leader将这些更改的请求发送到follower；  
+
+3、leader会等待大多数的follower确认提交之后，commit这些更改，然后通知客户端更新的结果；  
+
+4、同时leader会不断的尝试通知follower去存储所有更新的信息。  
+
+<img src="/img/raft-leader.png" alt="etcd" align=center/>
+
 
 
 
