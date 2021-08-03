@@ -168,7 +168,7 @@ Raft 的要求之一就是安全性不能依赖时间：整个系统不能因为
 
 领导人选举是 Raft 中对时间要求最为关键的方面。Raft 可以选举并维持一个稳定的领导人,只要系统满足下面的时间要求： 
 
-> 广播时间（broadcastTime） << 选举超时时间（electionTimeout） << 平均故障间隔时间（MTBF）
+> 广播时间（broadcastTime） << 候选超时时间（electionTimeout） << 平均故障间隔时间（MTBF）
 
 - broadcastTime: 广播时间指的是从一个服务器并行的发送 RPCs 给集群中的其他服务器并接收响应的平均时间，也就是集群之间的平均延时时间;  
 
@@ -180,9 +180,13 @@ Raft 的要求之一就是安全性不能依赖时间：整个系统不能因为
 
 在Leader宕机与选举出新任Leader之间，整个集群处于无主的状态，我们应该尽可能缩短此类状态的持续时间，而控制的参数就是electionTimeout的最小值，所以electionTimeout需要在保证大于broadcastTime的前提下远小于一个集群中机器的平均故障间隔时间MTBF。  
 
+### 网络分区问题
 
+如果由于网络的隔离，导致原来的Raft集群分裂成多个小的集群，各自分区中会重新开始选举形各自形成新的leader  
 
+如果发生拆分的情况，不同的leader会接收不同的client发来的请求
 
+<img src="/img/raft-net.png" alt="etcd" align=center/>
 
 
 
