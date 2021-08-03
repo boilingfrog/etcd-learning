@@ -10,6 +10,10 @@
     - [leader选举](#leader%E9%80%89%E4%B8%BE)
   - [日志复制](#%E6%97%A5%E5%BF%97%E5%A4%8D%E5%88%B6)
   - [安全性](#%E5%AE%89%E5%85%A8%E6%80%A7)
+    - [leader宕机，新的leader未同步前任committed的数据](#leader%E5%AE%95%E6%9C%BA%E6%96%B0%E7%9A%84leader%E6%9C%AA%E5%90%8C%E6%AD%A5%E5%89%8D%E4%BB%BBcommitted%E7%9A%84%E6%95%B0%E6%8D%AE)
+    - [Leader在将日志复制给Follower节点之前宕机](#leader%E5%9C%A8%E5%B0%86%E6%97%A5%E5%BF%97%E5%A4%8D%E5%88%B6%E7%BB%99follower%E8%8A%82%E7%82%B9%E4%B9%8B%E5%89%8D%E5%AE%95%E6%9C%BA)
+    - [Leader在将日志复制给Follower节点之间宕机](#leader%E5%9C%A8%E5%B0%86%E6%97%A5%E5%BF%97%E5%A4%8D%E5%88%B6%E7%BB%99follower%E8%8A%82%E7%82%B9%E4%B9%8B%E9%97%B4%E5%AE%95%E6%9C%BA)
+    - [Leader在响应客户端之前宕机](#leader%E5%9C%A8%E5%93%8D%E5%BA%94%E5%AE%A2%E6%88%B7%E7%AB%AF%E4%B9%8B%E5%89%8D%E5%AE%95%E6%9C%BA)
   - [时间和可用性](#%E6%97%B6%E9%97%B4%E5%92%8C%E5%8F%AF%E7%94%A8%E6%80%A7)
   - [网络分区问题](#%E7%BD%91%E7%BB%9C%E5%88%86%E5%8C%BA%E9%97%AE%E9%A2%98)
   - [总结](#%E6%80%BB%E7%BB%93)
@@ -133,11 +137,11 @@ Leader会从后往前试，每次AppendEntries失败后尝试前一个日志条�
 
 ### 安全性
 
-上面我们讨论的是理想状态下的情况，在实际的生产环境中，我们会遇到各种各样的情况。这里参考了意味大佬文章[理解 Raft 分布式共识算法](https://www.zhenchao.org/2020/01/01/protocol/raft/)     
+上面我们讨论的是理想状态下的情况，在实际的生产环境中，我们会遇到各种各样的情况。这里参考了一位大佬文章[理解 Raft 分布式共识算法](https://www.zhenchao.org/2020/01/01/protocol/raft/)     
 
 下面来讨论几种常见的问题  
 
-**leader宕机，新的leader未同步前任committed的数据**
+#### leader宕机，新的leader未同步前任committed的数据
 
 leader宕机了，然后又选出了新的leader，但是新的leader没有同步前任committed的数据，新leader节点会强行覆盖集群中其它节点与自己冲突的日志数据。  
 
@@ -149,11 +153,11 @@ leader宕机了，然后又选出了新的leader，但是新的leader没有同�
 
 - 2、如果 term 值相等，则参选节点的 lastLogIndex 大于等于投票节点的 lastLogIndex 值。  
 
-**Leader在将日志复制给Follower节点之前宕机**
+#### Leader在将日志复制给Follower节点之前宕机
 
 如果在复制之前宕机，当然这时候消息处于uncommitted状态，新选出的leader一定不包含这些日志信息，所以新的leader会强制覆盖follower中跟他冲突的日志，也就是刚刚宕机的leader，如果变成follower，他未同步的信息会被新的leader覆盖掉。  
 
-**Leader在将日志复制给Follower节点之间宕机**
+#### Leader在将日志复制给Follower节点之间宕机
 
 在复制的过程中宕机，会有两种情况：   
 
@@ -166,7 +170,7 @@ leader宕机了，然后又选出了新的leader，但是新的leader没有同�
 
 情况2：Leader在复制的过程中宕机,所以肯定消息是没有commit的，新的leader需要再次尝试将其复制给各个Follower节点，并依据自己的复制状态决定是否提交这些日志。   
 
-**Leader在响应客户端之前宕机**
+#### Leader在响应客户端之前宕机
 
 这种情况，我们根据上面的同步机制可以知道，消息肯定是committed状态的，新的leader肯定包含这个信息，但是新任Leader可能还未被通知该日志已经被提交，不过这个信息在之后一定会被新任Leader标记为committed。   
 
