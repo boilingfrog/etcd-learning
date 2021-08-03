@@ -2,6 +2,7 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
 - [ETCD的Raft一致性算法原理](#etcd%E7%9A%84raft%E4%B8%80%E8%87%B4%E6%80%A7%E7%AE%97%E6%B3%95%E5%8E%9F%E7%90%86)
+  - [前言](#%E5%89%8D%E8%A8%80)
   - [Raft原理了解](#raft%E5%8E%9F%E7%90%86%E4%BA%86%E8%A7%A3)
   - [raft选举](#raft%E9%80%89%E4%B8%BE)
     - [raft中的几种状态](#raft%E4%B8%AD%E7%9A%84%E5%87%A0%E7%A7%8D%E7%8A%B6%E6%80%81)
@@ -17,6 +18,10 @@
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 ## ETCD的Raft一致性算法原理
+
+### 前言
+
+关于Raft的文章很多，本文是参考了很多的文章之后，总结出来的，写的不对之处欢迎赐教。  
 
 ### Raft原理了解
 
