@@ -21,6 +21,18 @@ Etcd将raft协议实现为一个library，然后本身作为一个应用使用�
 
 ### raft实现
 
+先来看几个源码中定义的一些变量概念  
+
+- Node: 对etcd-raft模块具体实现的一层封装，方便上层模块使用etcd-raft模块；  
+
+- 上层模块: etcd-raft的调用者，上层模块通过Node提供的API与底层的etcd-raft模块进行交互；  
+
+- Cluster: 表示一个集群,其中记录了该集群的基础信息；  
+
+- Member: 组层Cluster的元素之一，其中封装了一个节点的基本信息；  
+
+- Peer: 集群中某个节点对集群中另一个节点的称呼；  
+
 ### 领导者选举
 
 对于node来讲，刚被出初始化的时候就是follower状态，当集群中的节点初次启动时会通过`StartNode()`函数启动创建对应的node实例和底层的raft实例。在`StartNode()`方法中，主要是根据传入的config配置创建raft实例并初始raft负使用的相关组件。   
@@ -123,6 +135,10 @@ Step是etcd-raft模块负责各类信息的入口
 【Raft 在 etcd 中的实现】https://blog.betacat.io/post/raft-implementation-in-etcd/  
 【etcd Raft库解析】https://www.codedump.info/post/20180922-etcd-raft/  
 【etcd raft 设计与实现《一》】https://zhuanlan.zhihu.com/p/51063866    
+【raftexample 源码解读】https://zhuanlan.zhihu.com/p/91314329  
+【etcd技术内幕】  
+
+
 
 
 

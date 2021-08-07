@@ -60,3 +60,5 @@ func DB(id string) (int, error) {
 	i := int(key) % 28
 	return i, nil
 }
+
+// etcd/raft/raft.go
