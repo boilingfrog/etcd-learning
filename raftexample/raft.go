@@ -247,20 +247,25 @@ func (rc *raftNode) openWAL(snapshot *raftpb.Snapshot) *wal.WAL {
 
 // replayWAL replays WAL entries into the raft instance.
 func (rc *raftNode) replayWAL() *wal.WAL {
+	// 读取快照文件，该方法会调用 snapshotter.Load() 方法完成快照文件的读取
 	log.Printf("replaying WAL of member %d", rc.id)
 	snapshot := rc.loadSnapshot()
+	// 根据读取到的 Snapshot 实例的元数据创建 WAL 实例
 	w := rc.openWAL(snapshot)
+	// 读取快照数据之后的全部 WAL 日志数据，并获取状态信息
 	_, st, ents, err := w.ReadAll()
 	if err != nil {
 		log.Fatalf("raftexample: failed to read WAL (%v)", err)
 	}
+	// 创建 MemoryStorage 实例
 	rc.raftStorage = raft.NewMemoryStorage()
 	if snapshot != nil {
 		rc.raftStorage.ApplySnapshot(*snapshot)
 	}
+	// 将读取 WAL 日志之后得到的 HardState 加载到 MemoryStorage 中
 	rc.raftStorage.SetHardState(st)
 
-	// append to storage so raft starts at the right place in log
+	// 将读取的 WAL 日志得到的 Entry 记录加载到 MemoryStorage 中
 	rc.raftStorage.Append(ents)
 
 	return w

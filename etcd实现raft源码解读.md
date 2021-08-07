@@ -84,6 +84,15 @@ type Message struct {
 }
 ```
 
+### 看下etcd中的raftexample
+
+这里先看下etcd中提供的raftexample来简单连接下etcd中raft的使用  
+
+这里放一张raftexample总体的架构图  
+
+<img src="/img/etcd-raftExample.jpg" alt="etcd" align=center/>
+
+
 ### 领导者选举
 
 对于node来讲，刚被出初始化的时候就是follower状态，当集群中的节点初次启动时会通过`StartNode()`函数启动创建对应的node实例和底层的raft实例。在`StartNode()`方法中，主要是根据传入的config配置创建raft实例并初始raft负使用的相关组件。   
