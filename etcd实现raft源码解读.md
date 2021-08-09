@@ -230,6 +230,114 @@ func (rc *raftNode) startRaft() {
 }
 ```
 
+#### serveChannels
+
+处理上层应用与底层etcd-raft模块的交互  
+
+```go
+// 会单独启动一个后台 goroutine来负责上层模块 传递给 etcd-ra企 模块的数据，
+// 主要 处理前面介绍的 proposeC、 confChangeC 两个通道
+func (rc *raftNode) serveChannels() {
+	// 这里是获取快照数据和快照的元数据
+	snap, err := rc.raftStorage.Snapshot()
+	if err != nil {
+		panic(err)
+	}
+	rc.confState = snap.Metadata.ConfState
+	rc.snapshotIndex = snap.Metadata.Index
+	rc.appliedIndex = snap.Metadata.Index
+
+	defer rc.wal.Close()
+
+	// 创建一个每隔 lOOms 触发一次的定时器，那么在逻辑上，lOOms 即是 etcd-raft 组件的最小时间单位 ，
+	// 该定时器每触发一次，则逻辑时钟推进一次
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	// 单独启 动一个 goroutine 负责将 proposeC、 confChangeC 远远上接收到
+	// 的数据传递给 etcd-raft 组件进行处理
+	go func() {
+		confChangeCount := uint64(0)
+
+		for rc.proposeC != nil && rc.confChangeC != nil {
+			select {
+			case prop, ok := <-rc.proposeC:
+				if !ok {
+					// 发生异常将proposeC置空
+					rc.proposeC = nil
+				} else {
+					// 阻塞直到消息被处理
+					rc.node.Propose(context.TODO(), []byte(prop))
+				}
+				// 收到上层应用通过 confChangeC远远传递过来的数据
+			case cc, ok := <-rc.confChangeC:
+				if !ok {
+					// 如果发生异常将confChangeC置空
+					rc.confChangeC = nil
+				} else {
+					confChangeCount++
+					cc.ID = confChangeCount
+					rc.node.ProposeConfChange(context.TODO(), cc)
+				}
+			}
+		}
+		// 关闭 stopc 通道，触发 rafeNode.stop() 方法的调用
+		close(rc.stopc)
+	}()
+
+	// 处理 etcd-raft 模块返回给上层模块的数据及其他相关的操作
+	for {
+		select {
+		case <-ticker.C:
+			// 上述 ticker 定时器触发一次
+			rc.node.Tick()
+
+		// 读取 node.readyc 通道
+		// 该通道是 etcd-raft 组件与上层应用交互的主要channel之一
+		// 其中传递的 Ready 实例也封装了很多信息
+		case rd := <-rc.node.Ready():
+			// 将当前 etcd raft 组件的状态信息，以及待持久化的 Entry 记录先记录到 WAL 日志文件中，
+			// 即使之后宕机，这些信息也可以在节点下次启动时，通过前面回放 WAL 日志的方式进行恢复
+			rc.wal.Save(rd.HardState, rd.Entries)
+			// 检测到 etcd-raft 组件生成了新的快照数据
+			if !raft.IsEmptySnap(rd.Snapshot) {
+				// 将新的快照数据写入快照文件中
+				rc.saveSnap(rd.Snapshot)
+				// 将新快照持久化到 raftStorage
+				rc.raftStorage.ApplySnapshot(rd.Snapshot)
+				// 通知上层应用加载新快照
+				rc.publishSnapshot(rd.Snapshot)
+			}
+			// 将待持久化的 Entry 记录追加到 raftStorage 中完成持久化
+			rc.raftStorage.Append(rd.Entries)
+			// 将待发送的消息发送到指定节点
+			rc.transport.Send(rd.Messages)
+			// 将已提交、待应用的 Entry 记录应用到上层应用的状态机中
+			applyDoneC, ok := rc.publishEntries(rc.entriesToApply(rd.CommittedEntries))
+			if !ok {
+				rc.stop()
+				return
+			}
+
+			// 随着节点的运行， WAL 日志量和 raftLog.storage 中的 Entry 记录会不断增加 ，
+			// 所以节点每处理 10000 条(默认值) Entry 记录，就会触发一次创建快照的过程，
+			// 同时 WAL 会释放一些日志文件的句柄，raftLog.storage 也会压缩其保存的 Entry 记录
+			rc.maybeTriggerSnapshot(applyDoneC)
+			// 上层应用处理完该 Ready 实例，通知 etcd-raft 纽件准备返回下一个 Ready 实例
+			rc.node.Advance()
+
+		case err := <-rc.transport.ErrorC:
+			rc.writeError(err)
+			return
+
+		case <-rc.stopc:
+			rc.stop()
+			return
+		}
+	}
+}
+```
+
 ### 领导者选举
 
 对于node来讲，刚被出初始化的时候就是follower状态，当集群中的节点初次启动时会通过`StartNode()`函数启动创建对应的node实例和底层的raft实例。在`StartNode()`方法中，主要是根据传入的config配置创建raft实例并初始raft负使用的相关组件。   
@@ -257,6 +365,50 @@ func StartNode(c *Config, peers []Peer) Node {
 
 	go n.run()
 	return &n
+}
+
+func NewRawNode(config *Config) (*RawNode, error) {
+	// 这里调用初始化newRaft
+	r := newRaft(config)
+	rn := &RawNode{
+		raft: r,
+	}
+	rn.prevSoftSt = r.softState()
+	rn.prevHardSt = r.hardState()
+	return rn, nil
+}
+
+func newRaft(c *Config) *raft {
+	...
+	r := &raft{
+		id:                        c.ID,
+		lead:                      None,
+		isLearner:                 false,
+		raftLog:                   raftlog,
+		maxMsgSize:                c.MaxSizePerMsg,
+		maxUncommittedSize:        c.MaxUncommittedEntriesSize,
+		prs:                       tracker.MakeProgressTracker(c.MaxInflightMsgs),
+		electionTimeout:           c.ElectionTick,
+		heartbeatTimeout:          c.HeartbeatTick,
+		logger:                    c.Logger,
+		checkQuorum:               c.CheckQuorum,
+		preVote:                   c.PreVote,
+		readOnly:                  newReadOnly(c.ReadOnlyOption),
+		disableProposalForwarding: c.DisableProposalForwarding,
+	}
+
+	...
+	// 启动都是follower状态
+	r.becomeFollower(r.Term, None)
+
+	var nodesStrs []string
+	for _, n := range r.prs.VoterNodes() {
+		nodesStrs = append(nodesStrs, fmt.Sprintf("%x", n))
+	}
+
+	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
+		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm())
+	return r
 }
 ```
 
