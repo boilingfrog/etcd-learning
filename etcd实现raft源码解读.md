@@ -10,7 +10,7 @@
     - [serveChannels](#servechannels)
   - [领导者选举](#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE)
     - [启动并初始化node节点](#%E5%90%AF%E5%8A%A8%E5%B9%B6%E5%88%9D%E5%A7%8B%E5%8C%96node%E8%8A%82%E7%82%B9)
-  - [定时器与心跳](#%E5%AE%9A%E6%97%B6%E5%99%A8%E4%B8%8E%E5%BF%83%E8%B7%B3)
+    - [发送心跳包](#%E5%8F%91%E9%80%81%E5%BF%83%E8%B7%B3%E5%8C%85)
     - [领导者选举](#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE-1)
   - [参考](#%E5%8F%82%E8%80%83)
 
@@ -484,7 +484,155 @@ Step是etcd-raft模块负责各类信息的入口
 
 default后面的step，被实现为一个状态机，它的step属性是一个函数指针，根据当前节点的不同角色，指向不同的消息处理函数：`stepLeader/stepFollower/stepCandidate`。与它类似的还有一个tick函数指针，根据角色的不同，也会在tickHeartbeat和tickElection之间来回切换，分别用来触发定时心跳和选举检测。  
 
-### 定时器与心跳
+#### 发送心跳包
+
+当一个节点成为leader的时候，会将节点的定时器设置为tickHeartbeat，然后周期性的调用，维持leader的地位  
+
+```go
+func (r *raft) becomeLeader() {
+	// 检测当 前节点的状态，禁止从 follower 状态切换成 leader 状态
+	if r.state == StateFollower {
+		panic("invalid transition [follower -> leader]")
+	}
+	// 将step 字段设置成 stepLeader
+	r.step = stepLeader
+	r.reset(r.Term)
+	// 设置心跳的函数
+	r.tick = r.tickHeartbeat
+	// 设置lead的id值
+	r.lead = r.id
+	// 更新当前的角色
+	r.state = StateLeader
+	...
+}
+
+func (r *raft) tickHeartbeat() {
+	// 递增心跳计数器
+	r.heartbeatElapsed++
+	// 递增选举计数器
+	r.electionElapsed++
+	...
+
+	if r.electionElapsed >= r.electionTimeout {
+		r.electionElapsed = 0
+		// 检测当前节点时候大多数节点保持连通
+		if r.checkQuorum {
+			r.Step(pb.Message{From: r.id, Type: pb.MsgCheckQuorum})
+		}
+		// If current leader cannot transfer leadership in electionTimeout, it becomes leader again.
+		if r.state == StateLeader && r.leadTransferee != None {
+			r.abortLeaderTransfer()
+		}
+	}
+
+	if r.heartbeatElapsed >= r.heartbeatTimeout {
+		r.heartbeatElapsed = 0
+		r.Step(pb.Message{From: r.id, Type: pb.MsgBeat})
+	}
+}
+```
+
+becomeLeader中的step被设置成stepLeader，所以将会调用stepLeader来处理leader中对应的消息  
+
+通过调用bcastHeartbeat向所有的节点发送心跳  
+
+```go
+func stepLeader(r *raft, m pb.Message) error {
+	// These message types do not require any progress for m.From.
+	switch m.Type {
+	case pb.MsgBeat:
+		// 向所有节点发送心跳
+		r.bcastHeartbeat()
+		return nil
+	case pb.MsgCheckQuorum:
+		// 检测是否和大部分节点保持连通
+		// 如果不连通切换到follower状态
+		if !r.prs.QuorumActive() {
+			r.logger.Warningf("%x stepped down to follower since quorum is not active", r.id)
+			r.becomeFollower(r.Term, None)
+		}
+		return nil
+		...
+	}
+}
+
+// bcastHeartbeat sends RPC, without entries to all the peers.
+func (r *raft) bcastHeartbeat() {
+	lastCtx := r.readOnly.lastPendingRequestCtx()
+// 这两个函数最终都将调用sendHeartbeat
+	if len(lastCtx) == 0 {
+		r.bcastHeartbeatWithCtx(nil)
+	} else {
+		r.bcastHeartbeatWithCtx([]byte(lastCtx))
+	}
+}
+
+// 向指定的节点发送信息
+func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
+	commit := min(r.prs.Progress[to].Match, r.raftLog.committed)
+	m := pb.Message{
+		To:      to,
+        // 发送MsgHeartbeat类型的数据
+		Type:    pb.MsgHeartbeat,
+		Commit:  commit,
+		Context: ctx,
+	}
+
+	r.send(m)
+}
+```
+
+最终的心跳通过MsgHeartbeat的消息类型进行发送   
+
+
+当节点调用becomeFollower的时候，都会将节点的定时器设置为tickElection，然后周期性的调用  
+
+```go
+func (r *raft) becomeFollower(term uint64, lead uint64) {
+	r.step = stepFollower
+	r.reset(term)
+	r.tick = r.tickElection
+	r.lead = lead
+	r.state = StateFollower
+	r.logger.Infof("%x became follower at term %d", r.id, r.Term)
+}
+
+// tickElection is run by followers and candidates after r.electionTimeout.
+func (r *raft) tickElection() {
+	r.electionElapsed++
+    // promotable返回是否可以被提升为leader
+    // pastElectionTimeout检测当前的选举计数器是否超时
+	if r.promotable() && r.pastElectionTimeout() {
+		r.electionElapsed = 0
+        // 发起选举
+		r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
+	}
+}
+```
+
+总结：  
+
+1、如果可以成为leader;  
+
+2、并且上一次收到Leader节点的消息或者心跳已经超过了等待的时间；  
+
+3、重新发起新的选举请求。  
+
+如果Leader节点正常
+
+
+
+Step函数看到MsgHup这个消息后会调用campaign函数，进入竞选状态  
+
+```go
+func (r *raft) Step(m pb.Message) error {
+    //...
+    switch m.Type {
+    case pb.MsgHup:
+        r.campaign(campaignElection)
+    }
+}
+```
 
 
 
