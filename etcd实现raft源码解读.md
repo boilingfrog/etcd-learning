@@ -7,7 +7,9 @@
   - [看下etcd中的raftexample](#%E7%9C%8B%E4%B8%8Betcd%E4%B8%AD%E7%9A%84raftexample)
     - [newRaftNode](#newraftnode)
     - [startRaft](#startraft)
+    - [serveChannels](#servechannels)
   - [领导者选举](#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE)
+    - [启动并初始化node节点](#%E5%90%AF%E5%8A%A8%E5%B9%B6%E5%88%9D%E5%A7%8B%E5%8C%96node%E8%8A%82%E7%82%B9)
   - [定时器与心跳](#%E5%AE%9A%E6%97%B6%E5%99%A8%E4%B8%8E%E5%BF%83%E8%B7%B3)
     - [领导者选举](#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE-1)
   - [参考](#%E5%8F%82%E8%80%83)
@@ -340,6 +342,8 @@ func (rc *raftNode) serveChannels() {
 
 ### 领导者选举
 
+#### 启动并初始化node节点
+
 对于node来讲，刚被出初始化的时候就是follower状态，当集群中的节点初次启动时会通过`StartNode()`函数启动创建对应的node实例和底层的raft实例。在`StartNode()`方法中，主要是根据传入的config配置创建raft实例并初始raft负使用的相关组件。   
 
 ```go
@@ -412,6 +416,10 @@ func newRaft(c *Config) *raft {
 }
 ```
 
+总结：  
+
+进行node节点初始化工作，所有的Node开始都被初始化为Follower状态  
+
 重点来看下run 
 
 ```go
@@ -470,7 +478,11 @@ func (r *raft) Step(m pb.Message) error {
 }
 ```
 
+总结：  
+
 Step是etcd-raft模块负责各类信息的入口  
+
+default后面的step，被实现为一个状态机，它的step属性是一个函数指针，根据当前节点的不同角色，指向不同的消息处理函数：`stepLeader/stepFollower/stepCandidate`。与它类似的还有一个tick函数指针，根据角色的不同，也会在tickHeartbeat和tickElection之间来回切换，分别用来触发定时心跳和选举检测。  
 
 ### 定时器与心跳
 
