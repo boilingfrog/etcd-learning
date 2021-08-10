@@ -12,7 +12,6 @@
     - [启动并初始化node节点](#%E5%90%AF%E5%8A%A8%E5%B9%B6%E5%88%9D%E5%A7%8B%E5%8C%96node%E8%8A%82%E7%82%B9)
     - [发送心跳包](#%E5%8F%91%E9%80%81%E5%BF%83%E8%B7%B3%E5%8C%85)
     - [leader选举](#leader%E9%80%89%E4%B8%BE)
-    - [领导者选举](#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE-1)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -662,7 +661,7 @@ func stepLeader(r *raft, m pb.Message) error {
 
 #### leader选举
 
-当节点调用becomeFollower的时候，都会将节点的定时器设置为tickElection，然后周期性的调用  
+**1、当节点调用becomeFollower的时候，都会将节点的定时器设置为tickElection，然后周期性的调用**  
 
 ```go
 func (r *raft) becomeFollower(term uint64, lead uint64) {
@@ -695,7 +694,7 @@ func (r *raft) tickElection() {
 
 3、重新发起新的选举请求。  
 
-Step函数看到MsgHup这个消息后会调用campaign函数，进入竞选状态  
+**2、Step函数看到MsgHup这个消息后会调用campaign函数，进入竞选状态**  
 
 ```go
 func (r *raft) Step(m pb.Message) error {
@@ -723,22 +722,26 @@ func (r *raft) campaign(t CampaignType) {
 		// PreVote RPCs are sent for the next term before we've incremented r.Term.
 		term = r.Term + 1
 	} else {
+        // 切换到Candidate状态
 		r.becomeCandidate()
 		voteMsg = pb.MsgVote
 		term = r.Term
 	}
+    // 统计当前节点收到的选票 并统计其得票数是否超过半数，这次检测主要是为单节点设置的
+    // 判断是否是单节点
 	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
-		// We won the election after voting for ourselves (which must mean that
-		// this is a single-node cluster). Advance to the next state.
 		if t == campaignPreElection {
 			r.campaign(campaignElection)
 		} else {
+            // 是单节点直接，变成leader
 			r.becomeLeader()
 		}
 		return
 	}
 	...
+    // 向集群中的所有节点发送信息，请求投票
 	for _, id := range ids {
+        // 跳过自身的节点
 		if id == r.id {
 			continue
 		}
@@ -754,9 +757,115 @@ func (r *raft) campaign(t CampaignType) {
 }
 ```
 
+总结：  
 
+主要是切换到campaign状态，然后将自己的term信息发送出去，请求投票。   
 
-#### 领导者选举
+这里我们能看到对于Candidate会有一个PreCandidate，PreCandidate这个状态的作用的是什么呢？  
+
+当系统曾出现分区，分区消失后恢复的时候，可能会造成某个被split的Follower的Term数值很大。  
+
+对服务器进行分区时，它将不会收到heartbeat包，每次electionTimeout后成为Candidate都会递增Term。  
+
+当服务器在一段时间后恢复连接时，Term的值将会变得很大，然后引入的重新选举会导致导致临时的延迟与可用性问题。   
+
+PreElection阶段并不会真正增加当前节点的Term，它的主要作用是得到当前集群能否成功选举出一个Leader的答案，避免上面这种情况的发生。   
+
+接着Candidate的状态来分析  
+
+**3、其他节点收到信息，进行投票**
+
+能够投票需要满足下面条件：  
+
+1、当前节点没有给任何节点投票 或 投票的节点term大于本节点的 或者 是之前已经投票的节点；
+
+2、该节点的消息是最新的；    
+
+```go
+func (r *raft) Step(m pb.Message) error {
+	...
+	switch m.Type {
+	case pb.MsgVote, pb.MsgPreVote:
+		// We can vote if this is a repeat of a vote we've already cast...
+		canVote := r.Vote == m.From ||
+			// ...we haven't voted and we don't think there's a leader yet in this term...
+			(r.Vote == None && r.lead == None) ||
+			// ...or this is a PreVote for a future term...
+			(m.Type == pb.MsgPreVote && m.Term > r.Term)
+		// ...and we believe the candidate is up to date.
+		if canVote && r.raftLog.isUpToDate(m.Index, m.LogTerm) {
+			// 如果当前没有给任何节点投票（r.Vote == None）或者投票的节点term大于本节点的（m.Term > r.Term）
+			// 或者是之前已经投票的节点（r.Vote == m.From）
+			// 同时还满足该节点的消息是最新的（r.raftLog.isUpToDate(m.Index, m.LogTerm)），那么就接收这个节点的投票
+			r.logger.Infof("%x [logterm: %d, index: %d, vote: %x] cast %s for %x [logterm: %d, index: %d] at term %d",
+				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.Vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
+			r.send(pb.Message{To: m.From, Term: m.Term, Type: voteRespMsgType(m.Type)})
+			if m.Type == pb.MsgVote {
+				// 保存下来给哪个节点投票了
+				r.electionElapsed = 0
+				r.Vote = m.From
+			}
+		} else {
+			r.logger.Infof("%x [logterm: %d, index: %d, vote: %x] rejected %s from %x [logterm: %d, index: %d] at term %d",
+				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.Vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
+			r.send(pb.Message{To: m.From, Term: r.Term, Type: voteRespMsgType(m.Type), Reject: true})
+		}
+
+		...
+	}
+	return nil
+}
+```
+
+**4、candidate节点统计投票的结果**
+
+candidate节点接收到投票的信息，然后统计投票的数量  
+
+1、如果投票数大于节点数的一半，成为leader；  
+
+2、如果达不到，变成follower；  
+
+```go
+func stepCandidate(r *raft, m pb.Message) error {
+	// Only handle vote responses corresponding to our candidacy (while in
+	// StateCandidate, we may get stale MsgPreVoteResp messages in this term from
+	// our pre-candidate state).
+	var myVoteRespType pb.MessageType
+	if r.state == StatePreCandidate {
+		myVoteRespType = pb.MsgPreVoteResp
+	} else {
+		myVoteRespType = pb.MsgVoteResp
+	}
+	switch m.Type {
+	case myVoteRespType:
+		// 计算当前集群中有多少节点给自己投了票
+		gr, rj, res := r.poll(m.From, m.Type, !m.Reject)
+		r.logger.Infof("%x has received %d %s votes and %d vote rejections", r.id, gr, m.Type, rj)
+		switch res {
+		// 大多数投票了
+		case quorum.VoteWon:
+			if r.state == StatePreCandidate {
+				r.campaign(campaignElection)
+			} else {
+				// 如果进行投票的节点数量正好是半数以上节点数量
+				r.becomeLeader()
+				// 向集群中其他节点广 MsgApp 消息
+				r.bcastAppend()
+			}
+			// 票数不够
+		case quorum.VoteLost:
+			// pb.MsgPreVoteResp contains future term of pre-candidate
+			// m.Term > r.Term; reuse r.Term
+			// 切换到follower
+			r.becomeFollower(r.Term, None)
+		}
+		...
+	}
+	return nil
+}
+```
+
+每当收到一个MsgVoteResp类型的消息时，就会设置当前节点持有的votes数组，更新其中存储的节点投票状态，如果收到大多数的节点票数，切换成leader，向其他的节点发送当前节点当选的消息，通知其余节点更新Raft结构体中的Term等信息。  
 
 ### 参考
 
