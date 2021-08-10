@@ -11,6 +11,7 @@
   - [领导者选举](#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE)
     - [启动并初始化node节点](#%E5%90%AF%E5%8A%A8%E5%B9%B6%E5%88%9D%E5%A7%8B%E5%8C%96node%E8%8A%82%E7%82%B9)
     - [发送心跳包](#%E5%8F%91%E9%80%81%E5%BF%83%E8%B7%B3%E5%8C%85)
+    - [leader选举](#leader%E9%80%89%E4%B8%BE)
     - [领导者选举](#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE-1)
   - [参考](#%E5%8F%82%E8%80%83)
 
@@ -637,6 +638,30 @@ func (r *raft) handleHeartbeat(m pb.Message) {
 }
 ```
 
+当leader收到返回的信息的时候，会将对应的节点设置为RecentActive  
+
+```go
+func stepLeader(r *raft, m pb.Message) error {
+...
+	// 根据from，取出当前的follower的Progress
+	pr := r.prs.Progress[m.From]
+	if pr == nil {
+		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
+		return nil
+	}
+	switch m.Type {
+	case pb.MsgHeartbeatResp:
+		pr.RecentActive = true
+...
+	}
+	return nil
+}
+```
+
+如果follower在一定的时间内，没有收到leader节点的消息，就会发起新一轮的选举，重新选一个leader节点  
+
+#### leader选举
+
 当节点调用becomeFollower的时候，都会将节点的定时器设置为tickElection，然后周期性的调用  
 
 ```go
@@ -670,19 +695,62 @@ func (r *raft) tickElection() {
 
 3、重新发起新的选举请求。  
 
-如果Leader节点正常
-
-
-
 Step函数看到MsgHup这个消息后会调用campaign函数，进入竞选状态  
 
 ```go
 func (r *raft) Step(m pb.Message) error {
-    //...
-    switch m.Type {
-    case pb.MsgHup:
-        r.campaign(campaignElection)
-    }
+	//...
+	switch m.Type {
+	case pb.MsgHup:
+		if r.preVote {
+			r.hup(campaignPreElection)
+		} else {
+			r.hup(campaignElection)
+		}
+	}
+}
+
+func (r *raft) hup(t CampaignType) {
+	...
+	r.campaign(t)
+}
+
+func (r *raft) campaign(t CampaignType) {
+	...
+	if t == campaignPreElection {
+		r.becomePreCandidate()
+		voteMsg = pb.MsgPreVote
+		// PreVote RPCs are sent for the next term before we've incremented r.Term.
+		term = r.Term + 1
+	} else {
+		r.becomeCandidate()
+		voteMsg = pb.MsgVote
+		term = r.Term
+	}
+	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
+		// We won the election after voting for ourselves (which must mean that
+		// this is a single-node cluster). Advance to the next state.
+		if t == campaignPreElection {
+			r.campaign(campaignElection)
+		} else {
+			r.becomeLeader()
+		}
+		return
+	}
+	...
+	for _, id := range ids {
+		if id == r.id {
+			continue
+		}
+		r.logger.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
+			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
+
+		var ctx []byte
+		if t == campaignTransfer {
+			ctx = []byte(t)
+		}
+		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
+	}
 }
 ```
 
