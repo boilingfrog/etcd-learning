@@ -486,6 +486,8 @@ default后面的step，被实现为一个状态机，它的step属性是一个�
 
 #### 发送心跳包
 
+**作为leader**
+
 当一个节点成为leader的时候，会将节点的定时器设置为tickHeartbeat，然后周期性的调用，维持leader的地位  
 
 ```go
@@ -582,8 +584,58 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 }
 ```
 
-最终的心跳通过MsgHeartbeat的消息类型进行发送   
+最终的心跳通过MsgHeartbeat的消息类型进行发送，通知它们目前Leader的存活状态，重置所有Follower持有的超时计时器  
 
+**作为follower**
+
+1、接收到来自leader的RPC消息MsgHeartbeat；  
+
+2、然后重置当前节点的选举超时时间；
+
+3、回复leader自己的存活。
+
+```go
+func stepFollower(r *raft, m pb.Message) error {
+	switch m.Type {
+	case pb.MsgProp:
+		...
+	case pb.MsgHeartbeat:
+		r.electionElapsed = 0
+		r.lead = m.From
+		r.handleHeartbeat(m)
+		...
+	}
+	return nil
+}
+
+func (r *raft) handleHeartbeat(m pb.Message) {
+	r.raftLog.commitTo(m.Commit)
+	r.send(pb.Message{To: m.From, Type: pb.MsgHeartbeatResp, Context: m.Context})
+}
+```
+
+**作为candidate**
+
+candidate来处理MsgHeartbeat的信息，是先把字节变成follower，然后和上面的follower一样，回复leader自己的存活。  
+
+```go
+func stepCandidate(r *raft, m pb.Message) error {
+	...
+	switch m.Type {
+		...
+	case pb.MsgHeartbeat:
+		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
+		r.handleHeartbeat(m)
+	}
+	...
+	return nil
+}
+
+func (r *raft) handleHeartbeat(m pb.Message) {
+	r.raftLog.commitTo(m.Commit)
+	r.send(pb.Message{To: m.From, Type: pb.MsgHeartbeatResp, Context: m.Context})
+}
+```
 
 当节点调用becomeFollower的时候，都会将节点的定时器设置为tickElection，然后周期性的调用  
 
