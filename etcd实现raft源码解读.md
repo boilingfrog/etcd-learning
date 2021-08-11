@@ -106,6 +106,10 @@ type Message struct {
 
 raftexample 是一个`etcd raft library`的使用示例。它为Raft一致性算法的键值对集群存储提供了一个简单的`REST API`。  
 
+该包提供了goreman启动集群的方式，使用`goreman start`启动，可以很清楚的看到raft在启动过程中的选举过程，能够很好的帮助我们理解raft的选举过程  
+  
+<img src="/img/raftexample.jpg" alt="etcd" align=center/>
+
 来看下几个主要的函数实现  
 
 #### newRaftNode
