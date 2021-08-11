@@ -623,7 +623,7 @@ func (r *raft) handleHeartbeat(m pb.Message) {
 
 #### 作为candidate
 
-candidate来处理MsgHeartbeat的信息，是先把字节变成follower，然后和上面的follower一样，回复leader自己的存活。  
+candidate来处理MsgHeartbeat的信息，是先把自己变成follower，然后和上面的follower一样，回复leader自己的存活。  
 
 ```go
 func stepCandidate(r *raft, m pb.Message) error {
@@ -644,7 +644,7 @@ func (r *raft) handleHeartbeat(m pb.Message) {
 }
 ```
 
-当leader收到返回的信息的时候，会将对应的节点设置为RecentActive  
+当leader收到返回的信息的时候，会将对应的节点设置为RecentActive，表示该节点目前存活  
 
 ```go
 func stepLeader(r *raft, m pb.Message) error {
@@ -770,7 +770,7 @@ func (r *raft) campaign(t CampaignType) {
 
 主要是切换到campaign状态，然后将自己的term信息发送出去，请求投票。   
 
-这里我们能看到对于Candidate会有一个PreCandidate，PreCandidate这个状态的作用的是什么呢？  
+**这里我们能看到对于Candidate会有一个PreCandidate，PreCandidate这个状态的作用的是什么呢？**  
 
 当系统曾出现分区，分区消失后恢复的时候，可能会造成某个被split的Follower的Term数值很大。  
 
@@ -875,6 +875,18 @@ func stepCandidate(r *raft, m pb.Message) error {
 ```
 
 每当收到一个MsgVoteResp类型的消息时，就会设置当前节点持有的votes数组，更新其中存储的节点投票状态，如果收到大多数的节点票数，切换成leader，向其他的节点发送当前节点当选的消息，通知其余节点更新Raft结构体中的Term等信息。  
+
+
+上面涉及到几种状态的切换  
+
+正常情况只有3种状态    
+
+<img src="/img/etcd-raft-node.png" alt="etcd" align=center/>
+
+为了防止在分区的情况下，某个split的Follower的Term数值变得很大的场景，引入了PreCandidate  
+
+<img src="/img/etcd-raft-node-pre.png" alt="etcd" align=center/>
+
 
 ### 参考
 
