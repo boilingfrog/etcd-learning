@@ -568,7 +568,7 @@ func stepLeader(r *raft, m pb.Message) error {
 // bcastHeartbeat sends RPC, without entries to all the peers.
 func (r *raft) bcastHeartbeat() {
 	lastCtx := r.readOnly.lastPendingRequestCtx()
-// 这两个函数最终都将调用sendHeartbeat
+	// 这两个函数最终都将调用sendHeartbeat
 	if len(lastCtx) == 0 {
 		r.bcastHeartbeatWithCtx(nil)
 	} else {
@@ -581,7 +581,7 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 	commit := min(r.prs.Progress[to].Match, r.raftLog.committed)
 	m := pb.Message{
 		To:      to,
-        // 发送MsgHeartbeat类型的数据
+		// 发送MsgHeartbeat类型的数据
 		Type:    pb.MsgHeartbeat,
 		Commit:  commit,
 		Context: ctx,
@@ -887,6 +887,37 @@ func stepCandidate(r *raft, m pb.Message) error {
 
 <img src="/img/etcd-raft-node-pre.png" alt="etcd" align=center/>
 
+对于不同节点之间的切换，调用的对应的bacome*方法就可以了  
+
+这里需要注意的就是对应的每个bacome*中的step和tick
+
+```go
+func (r *raft) becomeFollower(term uint64, lead uint64) {
+	r.step = stepFollower
+	r.reset(term)
+	r.tick = r.tickElection
+	r.lead = lead
+	r.state = StateFollower
+	r.logger.Infof("%x became follower at term %d", r.id, r.Term)
+}
+
+func (r *raft) becomeCandidate() {
+	// TODO(xiangli) remove the panic when the raft implementation is stable
+	if r.state == StateLeader {
+		panic("invalid transition [leader -> candidate]")
+	}
+	r.step = stepCandidate
+	r.reset(r.Term + 1)
+	r.tick = r.tickElection
+	r.Vote = r.id
+	r.state = StateCandidate
+	r.logger.Infof("%x became candidate at term %d", r.id, r.Term)
+}
+```
+
+它的step属性是一个函数指针，根据当前节点的不同角色，指向不同的消息处理函数：stepLeader/stepFollower/stepCandidate。  
+
+tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和tickElection之间来回切换，分别用来触发定时心跳和选举检测。
 
 ### 参考
 
