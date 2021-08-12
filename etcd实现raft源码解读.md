@@ -19,6 +19,7 @@
     - [2、发起竞选](#2%E5%8F%91%E8%B5%B7%E7%AB%9E%E9%80%89)
     - [3、其他节点收到信息，进行投票](#3%E5%85%B6%E4%BB%96%E8%8A%82%E7%82%B9%E6%94%B6%E5%88%B0%E4%BF%A1%E6%81%AF%E8%BF%9B%E8%A1%8C%E6%8A%95%E7%A5%A8)
     - [4、candidate节点统计投票的结果](#4candidate%E8%8A%82%E7%82%B9%E7%BB%9F%E8%AE%A1%E6%8A%95%E7%A5%A8%E7%9A%84%E7%BB%93%E6%9E%9C)
+  - [leader如何同步消息到follower](#leader%E5%A6%82%E4%BD%95%E5%90%8C%E6%AD%A5%E6%B6%88%E6%81%AF%E5%88%B0follower)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -931,6 +932,8 @@ tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和
 
 
 
+
+
 ### 参考
 
 【etcd技术内幕】一本关于etcd不错的书籍
@@ -939,6 +942,8 @@ tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和
 【etcd Raft库解析】https://www.codedump.info/post/20180922-etcd-raft/  
 【etcd raft 设计与实现《一》】https://zhuanlan.zhihu.com/p/51063866    
 【raftexample 源码解读】https://zhuanlan.zhihu.com/p/91314329  
+【etcd实现-全流程分析】https://zhuanlan.zhihu.com/p/135891186    
+【线性一致性和Raft】https://pingcap.com/zh/blog/linearizability-and-raft  
   
 
 
