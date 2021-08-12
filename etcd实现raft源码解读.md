@@ -652,7 +652,7 @@ func (r *raft) handleHeartbeat(m pb.Message) {
 
 ```go
 func stepLeader(r *raft, m pb.Message) error {
-...
+	...
 	// 根据from，取出当前的follower的Progress
 	pr := r.prs.Progress[m.From]
 	if pr == nil {
@@ -662,7 +662,7 @@ func stepLeader(r *raft, m pb.Message) error {
 	switch m.Type {
 	case pb.MsgHeartbeatResp:
 		pr.RecentActive = true
-...
+		...
 	}
 	return nil
 }
@@ -684,14 +684,14 @@ func (r *raft) becomeFollower(term uint64, lead uint64) {
 	r.logger.Infof("%x became follower at term %d", r.id, r.Term)
 }
 
-// tickElection is run by followers and candidates after r.electionTimeout.
+// follower以及candidate的tick函数，在r.electionTimeout之后被调用
 func (r *raft) tickElection() {
 	r.electionElapsed++
-    // promotable返回是否可以被提升为leader
-    // pastElectionTimeout检测当前的选举计数器是否超时
+	// promotable返回是否可以被提升为leader
+	// pastElectionTimeout检测当前的候选超时间是否过期
 	if r.promotable() && r.pastElectionTimeout() {
 		r.electionElapsed = 0
-        // 发起选举
+		// 发起选举
 		r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
 	}
 }
@@ -701,7 +701,7 @@ func (r *raft) tickElection() {
 
 1、如果可以成为leader;  
 
-2、并且上一次收到Leader节点的消息或者心跳已经超过了等待的时间；  
+2、没有收到leader的心跳，候选超时时间过期了；  
 
 3、重新发起新的选举请求。  
 
@@ -923,14 +923,23 @@ func (r *raft) becomeCandidate() {
 
 tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和tickElection之间来回切换，分别用来触发定时心跳和选举检测。
 
+### leader如何同步消息到follower
+
+这里放一张etcd中leader节点同步数据到follower的流程图  
+
+<img src="/img/raft-leader.png" alt="etcd" align=center/>
+
+
+
 ### 参考
 
+【etcd技术内幕】一本关于etcd不错的书籍
 【高可用分布式存储 etcd 的实现原理】https://draveness.me/etcd-introduction/  
 【Raft 在 etcd 中的实现】https://blog.betacat.io/post/raft-implementation-in-etcd/  
 【etcd Raft库解析】https://www.codedump.info/post/20180922-etcd-raft/  
 【etcd raft 设计与实现《一》】https://zhuanlan.zhihu.com/p/51063866    
 【raftexample 源码解读】https://zhuanlan.zhihu.com/p/91314329  
-【etcd技术内幕】  
+  
 
 
 
