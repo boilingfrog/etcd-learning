@@ -19,7 +19,7 @@
     - [2、发起竞选](#2%E5%8F%91%E8%B5%B7%E7%AB%9E%E9%80%89)
     - [3、其他节点收到信息，进行投票](#3%E5%85%B6%E4%BB%96%E8%8A%82%E7%82%B9%E6%94%B6%E5%88%B0%E4%BF%A1%E6%81%AF%E8%BF%9B%E8%A1%8C%E6%8A%95%E7%A5%A8)
     - [4、candidate节点统计投票的结果](#4candidate%E8%8A%82%E7%82%B9%E7%BB%9F%E8%AE%A1%E6%8A%95%E7%A5%A8%E7%9A%84%E7%BB%93%E6%9E%9C)
-  - [leader如何同步消息到follower](#leader%E5%A6%82%E4%BD%95%E5%90%8C%E6%AD%A5%E6%B6%88%E6%81%AF%E5%88%B0follower)
+  - [日志同步](#%E6%97%A5%E5%BF%97%E5%90%8C%E6%AD%A5)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -924,12 +924,50 @@ func (r *raft) becomeCandidate() {
 
 tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和tickElection之间来回切换，分别用来触发定时心跳和选举检测。
 
-### leader如何同步消息到follower
+### 日志同步
 
 这里放一张etcd中leader节点同步数据到follower的流程图  
 
 <img src="/img/raft-leader.png" alt="etcd" align=center/>
 
+Raft中日志同步的核心就是集群中leader如何同步日志到各个follower。日志的管理是在raftLog结构上完成的。  
+
+```go
+type raftLog struct {
+	// 用于保存自从最后一次snapshot之后提交的数据
+	storage Storage
+
+	// 用于保存还没有持久化的数据和快照，这些数据最终都会保存到storage中
+	unstable unstable
+
+    // 当天提交的日志数据索引
+	committed uint64
+	// committed保存是写入持久化存储中的最高index，而applied保存的是传入状态机中的最高index
+	// 即一条日志首先要提交成功（即committed），才能被applied到状态机中
+	// 因此以下不等式一直成立：applied <= committed
+	applied uint64
+
+	logger Logger
+
+	// 调用 nextEnts 时，返回的日志项集合的最大的大小
+	// nextEnts 函数返回应用程序已经可以应用到状态机的日志项集合
+	maxNextEntsSize uint64
+}
+```
+
+梳理WAL处理日志的过程：  
+
+- 1、客户端向etcd集群发起一次请求，请求中封装的Entry首先会交给etcd-raft处理，etcd-raft会将Entry记录保存到raftLog.unstable中；  
+
+- 2、etcd-raft将Entry记录封装到Ready实例中，返回给上层模块进行持久化；  
+
+- 3、上层模块收到持久化的Ready记录之后，会记录到WAL文件中，然后进行持久化，最后通知etcd-raft模块进行处理；  
+
+- 4、etcd-raft将该Entry记录从unstable中移到storage中保存；  
+
+- 5、当该Entry记录被复制到集区中的半数以上节点的时候，该Entry记录会被Lader节点认为是已经提交了，封装到Ready实例中通知上层模块；  
+
+- 6、此时上层模块将该Ready实例封装的Entry记录应用到状态机中。   
 
 
 
@@ -944,6 +982,7 @@ tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和
 【raftexample 源码解读】https://zhuanlan.zhihu.com/p/91314329  
 【etcd实现-全流程分析】https://zhuanlan.zhihu.com/p/135891186    
 【线性一致性和Raft】https://pingcap.com/zh/blog/linearizability-and-raft  
+【etcd raft 设计与实现《二》】https://zhuanlan.zhihu.com/p/51065416  
   
 
 
