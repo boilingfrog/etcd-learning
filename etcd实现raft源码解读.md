@@ -940,7 +940,7 @@ type raftLog struct {
 	// 用于保存还没有持久化的数据和快照，这些数据最终都会保存到storage中
 	unstable unstable
 
-    // 当天提交的日志数据索引
+	// 当天提交的日志数据索引
 	committed uint64
 	// committed保存是写入持久化存储中的最高index，而applied保存的是传入状态机中的最高index
 	// 即一条日志首先要提交成功（即committed），才能被applied到状态机中
@@ -969,7 +969,7 @@ type raftLog struct {
 
 - 6、此时上层模块将该Ready实例封装的Entry记录应用到状态机中。   
 
-
+<img src="/img/etcd-raft-wal.jpg" alt="etcd" align=center/>
 
 
 ### 参考
