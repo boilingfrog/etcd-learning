@@ -20,6 +20,8 @@
     - [3、其他节点收到信息，进行投票](#3%E5%85%B6%E4%BB%96%E8%8A%82%E7%82%B9%E6%94%B6%E5%88%B0%E4%BF%A1%E6%81%AF%E8%BF%9B%E8%A1%8C%E6%8A%95%E7%A5%A8)
     - [4、candidate节点统计投票的结果](#4candidate%E8%8A%82%E7%82%B9%E7%BB%9F%E8%AE%A1%E6%8A%95%E7%A5%A8%E7%9A%84%E7%BB%93%E6%9E%9C)
   - [日志同步](#%E6%97%A5%E5%BF%97%E5%90%8C%E6%AD%A5)
+    - [WAL处理日志](#wal%E5%A4%84%E7%90%86%E6%97%A5%E5%BF%97)
+    - [leader同步follower日志](#leader%E5%90%8C%E6%AD%A5follower%E6%97%A5%E5%BF%97)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -94,6 +96,31 @@ type Message struct {
 	RejectHint uint64   `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`
 	// 携带的一些上下文的信息
 	Context    []byte   `protobuf:"bytes,12,opt,name=context" json:"context,omitempty"`
+}
+```
+
+- raftLog: Raft中日志同步的核心就是集群中leader如何同步日志到各个follower。日志的管理是在raftLog结构上完成的。  
+
+```go
+type raftLog struct {
+	// 用于保存自从最后一次snapshot之后提交的数据
+	storage Storage
+
+	// 用于保存还没有持久化的数据和快照，这些数据最终都会保存到storage中
+	unstable unstable
+
+	// 当天提交的日志数据索引
+	committed uint64
+	// committed保存是写入持久化存储中的最高index，而applied保存的是传入状态机中的最高index
+	// 即一条日志首先要提交成功（即committed），才能被applied到状态机中
+	// 因此以下不等式一直成立：applied <= committed
+	applied uint64
+
+	logger Logger
+
+	// 调用 nextEnts 时，返回的日志项集合的最大的大小
+	// nextEnts 函数返回应用程序已经可以应用到状态机的日志项集合
+	maxNextEntsSize uint64
 }
 ```
 
@@ -926,34 +953,13 @@ tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和
 
 ### 日志同步
 
-这里放一张etcd中leader节点同步数据到follower的流程图  
+#### WAL处理日志
 
-<img src="/img/raft-leader.png" alt="etcd" align=center/>
+WAL（Write Ahead Log）最大的作用是记录了整个数据变化的全部历程。在etcd中，所有数据的修改在提交前，都要先写入到WAL中。使用WAL进行数据的存储使得etcd拥有两个重要功能。  
 
-Raft中日志同步的核心就是集群中leader如何同步日志到各个follower。日志的管理是在raftLog结构上完成的。  
+- 故障快速恢复： 当你的数据遭到破坏时，就可以通过执行所有WAL中记录的修改操作，快速从最原始的数据恢复到数据损坏前的状态。
 
-```go
-type raftLog struct {
-	// 用于保存自从最后一次snapshot之后提交的数据
-	storage Storage
-
-	// 用于保存还没有持久化的数据和快照，这些数据最终都会保存到storage中
-	unstable unstable
-
-	// 当天提交的日志数据索引
-	committed uint64
-	// committed保存是写入持久化存储中的最高index，而applied保存的是传入状态机中的最高index
-	// 即一条日志首先要提交成功（即committed），才能被applied到状态机中
-	// 因此以下不等式一直成立：applied <= committed
-	applied uint64
-
-	logger Logger
-
-	// 调用 nextEnts 时，返回的日志项集合的最大的大小
-	// nextEnts 函数返回应用程序已经可以应用到状态机的日志项集合
-	maxNextEntsSize uint64
-}
-```
+- 数据回滚（undo）/重做（redo）：因为所有的修改操作都被记录在WAL中，需要回滚或重做，只需要反向或正向执行日志中的操作即可。
 
 梳理WAL处理日志的过程：  
 
@@ -970,6 +976,15 @@ type raftLog struct {
 - 6、此时上层模块将该Ready实例封装的Entry记录应用到状态机中。   
 
 <img src="/img/etcd-raft-wal.jpg" alt="etcd" align=center/>
+
+#### leader同步follower日志
+
+这里放一张etcd中leader节点同步数据到follower的流程图  
+
+<img src="/img/raft-leader.png" alt="etcd" align=center/>
+
+
+
 
 
 ### 参考
