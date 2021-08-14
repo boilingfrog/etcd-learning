@@ -20,7 +20,7 @@
     - [3、其他节点收到信息，进行投票](#3%E5%85%B6%E4%BB%96%E8%8A%82%E7%82%B9%E6%94%B6%E5%88%B0%E4%BF%A1%E6%81%AF%E8%BF%9B%E8%A1%8C%E6%8A%95%E7%A5%A8)
     - [4、candidate节点统计投票的结果](#4candidate%E8%8A%82%E7%82%B9%E7%BB%9F%E8%AE%A1%E6%8A%95%E7%A5%A8%E7%9A%84%E7%BB%93%E6%9E%9C)
   - [日志同步](#%E6%97%A5%E5%BF%97%E5%90%8C%E6%AD%A5)
-    - [WAL处理日志](#wal%E5%A4%84%E7%90%86%E6%97%A5%E5%BF%97)
+    - [WAL日志](#wal%E6%97%A5%E5%BF%97)
     - [leader同步follower日志](#leader%E5%90%8C%E6%AD%A5follower%E6%97%A5%E5%BF%97)
   - [参考](#%E5%8F%82%E8%80%83)
 
@@ -953,7 +953,7 @@ tick也是一个函数指针，根据角色的不同，也会在tickHeartbeat和
 
 ### 日志同步
 
-#### WAL处理日志
+#### WAL日志
 
 WAL（Write Ahead Log）最大的作用是记录了整个数据变化的全部历程。在etcd中，所有数据的修改在提交前，都要先写入到WAL中。使用WAL进行数据的存储使得etcd拥有两个重要功能。  
 
@@ -961,7 +961,11 @@ WAL（Write Ahead Log）最大的作用是记录了整个数据变化的全部�
 
 - 数据回滚（undo）/重做（redo）：因为所有的修改操作都被记录在WAL中，需要回滚或重做，只需要反向或正向执行日志中的操作即可。
 
-梳理WAL处理日志的过程：  
+这里发放一张关于etcd中处理Entry记录的过程(图片摘自【etcd技术内幕】)
+
+<img src="/img/etcd-raft-wal.jpg" alt="etcd" align=center/>
+
+具体的流程：  
 
 - 1、客户端向etcd集群发起一次请求，请求中封装的Entry首先会交给etcd-raft处理，etcd-raft会将Entry记录保存到raftLog.unstable中；  
 
@@ -975,7 +979,6 @@ WAL（Write Ahead Log）最大的作用是记录了整个数据变化的全部�
 
 - 6、此时上层模块将该Ready实例封装的Entry记录应用到状态机中。   
 
-<img src="/img/etcd-raft-wal.jpg" alt="etcd" align=center/>
 
 #### leader同步follower日志
 
