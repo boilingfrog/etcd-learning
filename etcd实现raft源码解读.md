@@ -22,6 +22,7 @@
   - [日志同步](#%E6%97%A5%E5%BF%97%E5%90%8C%E6%AD%A5)
     - [WAL日志](#wal%E6%97%A5%E5%BF%97)
     - [leader同步follower日志](#leader%E5%90%8C%E6%AD%A5follower%E6%97%A5%E5%BF%97)
+  - [总结](#%E6%80%BB%E7%BB%93)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -1094,18 +1095,26 @@ func stepLeader(r *raft, m pb.Message) error {
 			// 如果该节点之前状态是暂停，继续发送append消息给它
 			r.sendAppend(m.From)
 		}
+		...
 	}
-	...
-return nil
+	return nil
+}
+
+// 尝试提交索引，如果已经提交返回true
+// 然后应该调用bcastAppend通知所有的follower
+func (r *raft) maybeCommit() bool {
+	mci := r.prs.Committed()
+	return r.raftLog.maybeCommit(mci, r.Term)
 }
 ```
 
+### 总结
 
 
 
 ### 参考
 
-【etcd技术内幕】一本关于etcd不错的书籍
+【etcd技术内幕】一本关于etcd不错的书籍  
 【高可用分布式存储 etcd 的实现原理】https://draveness.me/etcd-introduction/  
 【Raft 在 etcd 中的实现】https://blog.betacat.io/post/raft-implementation-in-etcd/  
 【etcd Raft库解析】https://www.codedump.info/post/20180922-etcd-raft/  
