@@ -1037,19 +1037,6 @@ func stepLeader(r *raft, m pb.Message) error {
 	return nil
 }
 
-func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
-	...
-	r.maybeCommit()
-	return true
-}
-
-// 尝试推送提交索引
-// 如果提交成功，然后调用r.bcastAppend
-func (r *raft) maybeCommit() bool {
-	mci := r.prs.Committed()
-	return r.raftLog.maybeCommit(mci, r.Term)
-}
-
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	pr := r.prs.Progress[to]
 	if pr.IsPaused() {
@@ -1081,11 +1068,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 }
 ```
 
-3、leader中有协程处理unstable日志和刚刚准备发送的消息，newReady方法会把这些都封装到Ready结构中。   
-
-4、leader的另一个协程处理这个Ready，先发送消息，然后调用WAL将日志持久化到本地磁盘。  
-
-5、leader中的消息最终会以MsgApp类型的消息通知follower，follower收到这些信息之后，同leader一样，先将缓存中的日志条目持久化到磁盘中并将当前已经持久化的最新日志index返回给leader。  
+3、leader中的消息最终会以MsgApp类型的消息通知follower，follower收到这些信息之后，同leader一样，先将缓存中的日志条目持久化到磁盘中并将当前已经持久化的最新日志index返回给leader。  
 
 ```go
 func stepFollower(r *raft, m pb.Message) error {
@@ -1126,7 +1109,7 @@ func (l *raftLog) commitTo(tocommit uint64) {
 }
 ```
 
-6、最后leader收到大多数的follower的确认，commit自己的log，同时再次广播通知follower自己已经提交了。   
+4、最后leader收到大多数的follower的确认，commit自己的log，同时再次广播通知follower自己已经提交了。   
 
 ```go
 func stepLeader(r *raft, m pb.Message) error {
