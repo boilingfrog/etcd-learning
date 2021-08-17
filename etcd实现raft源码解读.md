@@ -1152,7 +1152,13 @@ func (l *raftLog) commitTo(tocommit uint64) {
 
 ### 总结
 
+1、etcd中的raft是作为一个library，然后本身作为一个应用使用它。这个库仅仅实现了对应的raft算法；  
 
+2、etcd-raft这种实现的过程，其中的step和tick被设计成了函数指针，根据不同的角色来防止不同的函数；  
+
+3、为了防止出现网络分区Term数值变得很大的场景，引入了PreCandidate；  
+
+4、etcd中所有的数据都是通过leader分发到follower，通过日志的复制确认机制，保证绝大多数的follower都能同步到消息。  
 
 ### 参考
 
