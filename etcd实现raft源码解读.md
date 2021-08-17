@@ -1037,6 +1037,19 @@ func stepLeader(r *raft, m pb.Message) error {
 	return nil
 }
 
+func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
+	...
+	r.maybeCommit()
+	return true
+}
+
+// 尝试推送提交索引
+// 如果提交成功，然后调用r.bcastAppend
+func (r *raft) maybeCommit() bool {
+	mci := r.prs.Committed()
+	return r.raftLog.maybeCommit(mci, r.Term)
+}
+
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	pr := r.prs.Progress[to]
 	if pr.IsPaused() {
@@ -1075,7 +1088,42 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 5、leader中的消息最终会以MsgApp类型的消息通知follower，follower收到这些信息之后，同leader一样，先将缓存中的日志条目持久化到磁盘中并将当前已经持久化的最新日志index返回给leader。  
 
 ```go
+func stepFollower(r *raft, m pb.Message) error {
+	switch m.Type {
+	case pb.MsgApp:
+		r.electionElapsed = 0
+		r.lead = m.From
+		r.handleAppendEntries(m)
+	}
+	return nil
+}
 
+func (r *raft) handleAppendEntries(m pb.Message) {
+	....
+	if mlastIndex, ok := r.raftLog.maybeAppend(m.Index, m.LogTerm, m.Commit, m.Entries...); ok {
+		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
+	}
+	...
+}
+
+// maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
+// it returns (last index of new entries, true).
+func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
+	...
+	l.commitTo(min(committed, lastnewi))
+	...
+	return 0, false
+}
+
+func (l *raftLog) commitTo(tocommit uint64) {
+	// never decrease commit
+	if l.committed < tocommit {
+		if l.lastIndex() < tocommit {
+			l.logger.Panicf("tocommit(%d) is out of range [lastIndex(%d)]. Was the raft log corrupted, truncated, or lost?", tocommit, l.lastIndex())
+		}
+		l.committed = tocommit
+	}
+}
 ```
 
 6、最后leader收到大多数的follower的确认，commit自己的log，同时再次广播通知follower自己已经提交了。   
@@ -1105,6 +1153,17 @@ func stepLeader(r *raft, m pb.Message) error {
 func (r *raft) maybeCommit() bool {
 	mci := r.prs.Committed()
 	return r.raftLog.maybeCommit(mci, r.Term)
+}
+
+// 提交修改committed就可以了
+func (l *raftLog) commitTo(tocommit uint64) {
+	// never decrease commit
+	if l.committed < tocommit {
+		if l.lastIndex() < tocommit {
+			l.logger.Panicf("tocommit(%d) is out of range [lastIndex(%d)]. Was the raft log corrupted, truncated, or lost?", tocommit, l.lastIndex())
+		}
+		l.committed = tocommit
+	}
 }
 ```
 
