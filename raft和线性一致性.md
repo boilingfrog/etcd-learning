@@ -1,7 +1,6 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
-
 - [线性一致性](#%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7)
   - [CAP](#cap)
   - [什么是CAP](#%E4%BB%80%E4%B9%88%E6%98%AFcap)
@@ -9,6 +8,7 @@
     - [AP wihtout C](#ap-wihtout-c)
     - [CA without P](#ca-without-p)
     - [CP without A](#cp-without-a)
+  - [线性一致性](#%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7-1)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -53,9 +53,20 @@ CAP理论：一个分布式系统最多只能同时满足一致性（Consistency
 
 如果不要求A（可用），相当于每个请求都需要在Server之间强一致，而P（分区）会导致同步时间无限延长，如此CP也是可以保证的。   
 
+### 线性一致性
+
+线性一致性又叫做原子一致性，强一致性。线性一致性可以看做只有一个单核处理器，或者可以看做只有一个数据副本，并且所有操作都是原子的。在可线性化的分布式系统中，如果某个节点更新了数据，那么在其他节点如果都能读取到这个最新的数据。可以看见线性一致性和我们的CAP中的C是一致的。  
+
+举个非线性一致性的例子，比如有个秒杀活动，你和你的朋友同时去抢购一样东西，有可能他那里的库存已经没了，但是在你手机上显示还有几件，这个就违反了线性一致性，哪怕过了一会你的手机也显示库存没有，也依然是违反了。  
+
 
 
 
 ### 参考
 
 【CAP定理】https://zh.wikipedia.org/wiki/CAP%E5%AE%9A%E7%90%86  
+【CAP定理】https://www.ibm.com/cn-zh/cloud/learn/cap-theorem  
+【线性一致性：什么是线性一致性？】https://zhuanlan.zhihu.com/p/42239873    
+【什么是数据一致性】https://github.com/javagrowing/JGrowing/blob/master/%E5%88%86%E5%B8%83%E5%BC%8F/%E8%B0%88%E8%B0%88%E6%95%B0%E6%8D%AE%E4%B8%80%E8%87%B4%E6%80%A7.md    
+
+
