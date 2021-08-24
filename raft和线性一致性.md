@@ -88,21 +88,86 @@ Leader执行ReadIndex大致的流程如下：
 
 确认当前leader的状态,避免当前节点状态切换，数据不能及时被同步更新  
 
-比如发生了网络分区：
+比如发生了网络分区：可参见[网络分区问题](https://www.cnblogs.com/ricklz/p/15094389.html#%E7%BD%91%E7%BB%9C%E5%88%86%E5%8C%BA%E9%97%AE%E9%A2%98)  
 
-1、当前的leader被分到了小的分区中，然后大的集群中有数据更新，小的集群是无感知的，所以读取就可能读取到旧的数据。  
+1、当前的leader被分到了小的分区中，然后大的集群中有数据更新，小的集群是无感知的，如果读的请求被定位到小的集群中，所以读取就可能读取到旧的数据。  
 
 2、小集群中的数据同样是不能被写入信息的，提交给该集群的指令对应的日志因不满足过半数的条件而无法被提交。  
 
 3、说以只有当前节点是集群中有效的leader才可以，也就是能收到大多数节点的回复信息。  
-
-[网络分区问题](https://www.cnblogs.com/ricklz/p/15094389.html#%E7%BD%91%E7%BB%9C%E5%88%86%E5%8C%BA%E9%97%AE%E9%A2%98)
 
 - 3、等待状态机的apply index大于或等于commited index时才读取数据；    
 
 `apply index`大于或等于`commited index`就能表示当前状态机已经把读请求发起时的已提交日志进行了apply动作，所以此时状态机的状态就可以反应读请求发起时的状态，满足一致性读；  
 
 - 4、执行读请求，将结果返回给Client。  
+
+进一步来看下etcd的源码是如何实现的呢  
+
+客户端的get请求  
+
+```go
+func (kv *kv) Get(ctx context.Context, key string, opts ...OpOption) (*GetResponse, error) {
+	r, err := kv.Do(ctx, OpGet(key, opts...))
+	return r.get, toErr(ctx, err)
+}
+
+// OpGet returns "get" operation based on given key and operation options.
+func OpGet(key string, opts ...OpOption) Op {
+	// WithPrefix and WithFromKey are not supported together
+	if IsOptsWithPrefix(opts) && IsOptsWithFromKey(opts) {
+		panic("`WithPrefix` and `WithFromKey` cannot be set at the same time, choose one")
+	}
+	ret := Op{t: tRange, key: []byte(key)}
+	ret.applyOpts(opts)
+	return ret
+}
+
+func (kv *kv) Do(ctx context.Context, op Op) (OpResponse, error) {
+	var err error
+	switch op.t {
+	case tRange:
+		var resp *pb.RangeResponse
+		resp, err = kv.remote.Range(ctx, op.toRangeRequest(), kv.callOpts...)
+		if err == nil {
+			return OpResponse{get: (*GetResponse)(resp)}, nil
+		}
+...
+	}
+	return OpResponse{}, toErr(ctx, err)
+}
+
+func (c *kVClient) Range(ctx context.Context, in *RangeRequest, opts ...grpc.CallOption) (*RangeResponse, error) {
+	out := new(RangeResponse)
+	err := c.cc.Invoke(ctx, "/etcdserverpb.KV/Range", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+service KV {
+  // Range gets the keys in the range from the key-value store.
+  rpc Range(RangeRequest) returns (RangeResponse) {
+      option (google.api.http) = {
+        post: "/v3/kv/range"
+        body: "*"
+    };
+  }
+}
+```
+
+可以看到get的请求最终通过通过rpc发送到range  
+
+服务端的实现  
+
+```
+
+```
+
+ 
+
+
 
             
 ### 参考
