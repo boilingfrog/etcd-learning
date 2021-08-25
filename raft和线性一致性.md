@@ -132,7 +132,7 @@ func (kv *kv) Do(ctx context.Context, op Op) (OpResponse, error) {
 		if err == nil {
 			return OpResponse{get: (*GetResponse)(resp)}, nil
 		}
-...
+		...
 	}
 	return OpResponse{}, toErr(ctx, err)
 }
@@ -157,12 +157,50 @@ service KV {
 }
 ```
 
-可以看到get的请求最终通过通过rpc发送到range  
+可以看到get的请求最终通过通过rpc发送到Range  
 
 服务端的实现  
 
-```
+```go
+func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeResponse, error) {
+	...
+	// 判断是否需要serializable read  
+	// Serializable为true表示需要serializable read
+	// serializable read 会直接读取当前节点的数据返回给客户端，它并不能保证返回给客户端的数据是最新的  
+	// Serializable为false表示需要linearizable read
+	// Linearizable Read 需要阻塞等待直到读到最新的数据
+	if !r.Serializable {
+		err = s.linearizableReadNotify(ctx)
+		trace.Step("agreement among raft nodes before linearized reading")
+		if err != nil {
+			return nil, err
+		}
+	}
+	...
+	return resp, err
+}
 
+func (s *EtcdServer) linearizableReadNotify(ctx context.Context) error {
+	s.readMu.RLock()
+	nc := s.readNotifier
+	s.readMu.RUnlock()
+
+	// signal linearizable loop for current notify if it hasn't been already
+	select {
+	case s.readwaitc <- struct{}{}:
+	default:
+	}
+
+	// wait for read state notification
+	select {
+	case <-nc.c:
+		return nc.err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return ErrStopped
+	}
+}
 ```
 
  
