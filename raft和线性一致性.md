@@ -104,7 +104,7 @@ Leader执行ReadIndex大致的流程如下：
 
 进一步来看下etcd的源码是如何实现的呢  
 
-客户端的get请求  
+**1、客户端的get请求**  
 
 ```go
 func (kv *kv) Get(ctx context.Context, key string, opts ...OpOption) (*GetResponse, error) {
@@ -159,7 +159,7 @@ service KV {
 
 可以看到get的请求最终通过通过rpc发送到Range  
 
-服务端的实现  
+**2、服务端响应读取请求**  
 
 ```go
 func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeResponse, error) {
@@ -239,6 +239,101 @@ func (s *EtcdServer) linearizableReadLoop() {
 	}
 }
 ```
+
+总结：  
+
+服务端对于读的操作，如果是Linearizable Read，也就是线性一致性的读，最终会通过linearizableReadLoop，监听readwaitc来触发，阻塞直到`apply index >= read index`，最终发送可以读取的信息。  
+
+**3、raft中如何处理一个读的请求**
+
+linearizableReadLoop收到readwaitc，最终会调用sendReadIndex  
+
+```go
+// etcd/server/etcdserver/v3_server.go
+func (s *EtcdServer) sendReadIndex(requestIndex uint64) error {
+...	
+err := s.r.ReadIndex(cctx, ctxToSend)
+...
+	return nil
+}
+
+// etcd/raft/node.go
+func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
+	return n.step(ctx, pb.Message{Type: pb.MsgReadIndex, Entries: []pb.Entry{{Data: rctx}}})
+}
+```
+总结：  
+
+通过MsgReadIndex的消息来发送读的请求  
+
+follower接收到MsgReadIndex类型的消息，会将这个消息发送到leader
+
+```go
+// etcd/raft/raft.go
+func stepFollower(r *raft, m pb.Message) error {
+	switch m.Type {
+		...
+	case pb.MsgReadIndex:
+		if r.lead == None {
+			r.logger.Infof("%x no leader at term %d; dropping index reading msg", r.id, r.Term)
+			return nil
+		}
+		// 目标为leader
+		m.To = r.lead
+		// 转发信息
+		r.send(m)
+	}
+	...
+	return nil
+}
+```
+
+再来看下leader是如任何处理的
+
+```go
+// etcd/raft/raft.go
+func stepLeader(r *raft, m pb.Message) error {
+	// These message types do not require any progress for m.From.
+	switch m.Type {
+	case pb.MsgReadIndex:
+		...
+		sendMsgReadIndexResponse(r, m)
+
+		return nil
+	}
+
+	return nil
+}
+
+func sendMsgReadIndexResponse(r *raft, m pb.Message) {
+	// thinking: use an internally defined context instead of the user given context.
+	// We can express this in terms of the term and index instead of a user-supplied value.
+	// This would allow multiple reads to piggyback on the same message.
+	switch r.readOnly.option {
+	// If more than the local vote is needed, go through a full broadcast.
+	case ReadOnlySafe:
+		r.readOnly.addRequest(r.raftLog.committed, m)
+		// The local node automatically acks the request.
+		r.readOnly.recvAck(r.id, m.Entries[0].Data)
+		r.bcastHeartbeatWithCtx(m.Entries[0].Data)
+	case ReadOnlyLeaseBased:
+		if resp := r.responseToReadIndexReq(m, r.raftLog.committed); resp.To != None {
+			r.send(resp)
+		}
+	}
+}
+```
+
+
+
+
+
+
+
+
+
+
+
 
  
 
