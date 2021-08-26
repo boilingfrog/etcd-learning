@@ -185,7 +185,8 @@ func (s *EtcdServer) linearizableReadNotify(ctx context.Context) error {
 	nc := s.readNotifier
 	s.readMu.RUnlock()
 
-	// signal linearizable loop for current notify if it hasn't been already
+	// linearizableReadLoop会阻塞监听readwaitc
+	// 这边写入一个空结构体到readwaitc中，linearizableReadLoop就会开始结束阻塞开始工作  
 	select {
 	case s.readwaitc <- struct{}{}:
 	default:
@@ -199,6 +200,42 @@ func (s *EtcdServer) linearizableReadNotify(ctx context.Context) error {
 		return ctx.Err()
 	case <-s.done:
 		return ErrStopped
+	}
+}
+
+// start会启动一个linearizableReadLoop
+func (s *EtcdServer) Start() {
+	...
+	s.GoAttach(s.linearizableReadLoop)
+	...
+}
+
+func (s *EtcdServer) linearizableReadLoop() {
+	for {
+		requestId := s.reqIDGen.Next()
+		leaderChangedNotifier := s.LeaderChangedNotify()
+		select {
+		case <-leaderChangedNotifier:
+			continue
+			// 在client发起一次Linearizable Read的时候，会向readwaitc写入一个空的结构体作为信号
+		case <-s.readwaitc:
+		case <-s.stopping:
+			return
+		}
+
+		...
+		// 此处是重点
+		// 等待 apply index >= read index
+		if appliedIndex < confirmedIndex {
+			select {
+			case <-s.applyWait.Wait(confirmedIndex):
+			case <-s.stopping:
+				return
+			}
+		}
+		// 发出可以进行读取状态机的信号
+		nr.notify(nil)
+		...
 	}
 }
 ```
