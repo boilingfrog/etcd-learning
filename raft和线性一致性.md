@@ -251,9 +251,9 @@ linearizableReadLoop收到readwaitc，最终会调用sendReadIndex
 ```go
 // etcd/server/etcdserver/v3_server.go
 func (s *EtcdServer) sendReadIndex(requestIndex uint64) error {
-...	
-err := s.r.ReadIndex(cctx, ctxToSend)
-...
+	...
+	err := s.r.ReadIndex(cctx, ctxToSend)
+	...
 	return nil
 }
 
@@ -305,22 +305,56 @@ func stepLeader(r *raft, m pb.Message) error {
 	return nil
 }
 
+// raft结构体中的readOnly作用是批量处理只读请求，只读请求有两种模式，分别是ReadOnlySafe和ReadOnlyLeaseBased
+// ReadOnlySafe是ETCD作者推荐的模式，因为这种模式不受节点之间时钟差异和网络分区的影响
+// 线性一致性读用的就是ReadOnlySafe
 func sendMsgReadIndexResponse(r *raft, m pb.Message) {
-	// thinking: use an internally defined context instead of the user given context.
-	// We can express this in terms of the term and index instead of a user-supplied value.
-	// This would allow multiple reads to piggyback on the same message.
 	switch r.readOnly.option {
 	// If more than the local vote is needed, go through a full broadcast.
 	case ReadOnlySafe:
+        // 将只读请求添加到readonly struct中
 		r.readOnly.addRequest(r.raftLog.committed, m)
-		// The local node automatically acks the request.
+        //recvAck通知只读结构raft状态机已收到对附加只读请求上下文的心跳信号的确认。
 		r.readOnly.recvAck(r.id, m.Entries[0].Data)
+        // leader 节点向其他节点发起广播
 		r.bcastHeartbeatWithCtx(m.Entries[0].Data)
 	case ReadOnlyLeaseBased:
 		if resp := r.responseToReadIndexReq(m, r.raftLog.committed); resp.To != None {
 			r.send(resp)
 		}
 	}
+}
+```
+
+这里省略follower对leader节点的心跳回应，直接看leader对心跳回执的信息处理  
+
+```go
+func stepLeader(r *raft, m pb.Message) error {
+	// All other message types require a progress for m.From (pr).
+	pr := r.prs.Progress[m.From]
+	if pr == nil {
+		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
+		return nil
+	}
+	switch m.Type {
+	case pb.MsgHeartbeatResp:
+		...
+		if r.readOnly.option != ReadOnlySafe || len(m.Context) == 0 {
+			return nil
+		}
+
+		if r.prs.Voters.VoteResult(r.readOnly.recvAck(m.From, m.Context)) != quorum.VoteWon {
+			return nil
+		}
+
+		rss := r.readOnly.advance(m)
+		for _, rs := range rss {
+			if resp := r.responseToReadIndexReq(rs.req, rs.index); resp.To != None {
+				r.send(resp)
+			}
+		}
+	}
+	return nil
 }
 ```
 
