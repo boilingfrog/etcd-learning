@@ -312,11 +312,11 @@ func sendMsgReadIndexResponse(r *raft, m pb.Message) {
 	switch r.readOnly.option {
 	// If more than the local vote is needed, go through a full broadcast.
 	case ReadOnlySafe:
-        // 将只读请求添加到readonly struct中
+		// 将只读请求添加到readonly struct中
 		r.readOnly.addRequest(r.raftLog.committed, m)
-        //recvAck通知只读结构raft状态机已收到对附加只读请求上下文的心跳信号的确认。
+		//recvAck通知只读结构raft状态机已收到对附加只读请求上下文的心跳信号的确认。
 		r.readOnly.recvAck(r.id, m.Entries[0].Data)
-        // leader 节点向其他节点发起广播
+		// leader 节点向其他节点发起广播
 		r.bcastHeartbeatWithCtx(m.Entries[0].Data)
 	case ReadOnlyLeaseBased:
 		if resp := r.responseToReadIndexReq(m, r.raftLog.committed); resp.To != None {
