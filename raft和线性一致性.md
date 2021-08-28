@@ -318,7 +318,7 @@ func stepFollower(r *raft, m pb.Message) error {
 }
 ```
 
-再来看下leader是如任何处理的
+再来看下leader是如何处理的
 
 ```go
 // etcd/raft/raft.go
@@ -392,17 +392,7 @@ func stepLeader(r *raft, m pb.Message) error {
 // 本身，将返回一个空值。
 func (r *raft) responseToReadIndexReq(req pb.Message, readIndex uint64) pb.Message {
 	// 通过from来判断该消息是否是follower节点转发到leader中的
-
-	// 如果是客户端直接发到leader节点的消息，将MsgReadIndex消息中的已提交位置和消息id封装成ReadState实例，添加到readStates
-	// raft 模块也有一个 for-loop 的 goroutine，来读取该数组，并对MsgReadIndex进行响应
-	if req.From == None || req.From == r.id {
-		r.readStates = append(r.readStates, ReadState{
-			Index:      readIndex,
-			RequestCtx: req.Entries[0].Data,
-		})
-		return pb.Message{}
-	}
-
+	...
 	// 如果是其他follower节点转发到leader节点的MsgReadIndex消息
 	// leader会回向follower节点返回响应的MsgReadIndexResp消息，follower会响应给client
 	return pb.Message{
@@ -432,7 +422,7 @@ func stepFollower(r *raft, m pb.Message) error {
 }
 ```
 
-raft 模块有一个for-loop的goroutine，来读取该数组，并对MsgReadIndex进行响应，将ReadStates中的最后一项将写入到readStateC中，通过监听readStateC的linearizableReadLoop函数的结果。  
+raft 模块有一个for-loop的goroutine，来读取该数组，并对MsgReadIndex进行响应，将ReadStates中的最后一项将写入到readStateC中，通知监听readStateC的linearizableReadLoop函数的结果。  
 
 ```go
 // etcd/server/etcdserver/raft.goetcd/raft/node.go
@@ -467,13 +457,64 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 ##### 如果leader收到只读请求
 
+```go
+func stepLeader(r *raft, m pb.Message) error {
+	// All other message types require a progress for m.From (pr).
+	pr := r.prs.Progress[m.From]
+	if pr == nil {
+		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
+		return nil
+	}
+	switch m.Type {
+	case pb.MsgReadIndex:
+		// 表示当前只有一个节点，当前节点就是leader
+		if r.prs.IsSingleton() {
+			if resp := r.responseToReadIndexReq(m, r.raftLog.committed); resp.To != None {
+				r.send(resp)
+			}
+			return nil
+		}
+		...
+		return nil
+	}
+	return nil
+}
 
+// responseToReadIndexReq 为 `req` 构造一个响应。如果`req`来自对等方
+// 本身，将返回一个空值。
+func (r *raft) responseToReadIndexReq(req pb.Message, readIndex uint64) pb.Message {
+	// 通过from来判断该消息是否是follower节点转发到leader中的
 
+	// 如果是客户端直接发到leader节点的消息，将MsgReadIndex消息中的已提交位置和消息id封装成ReadState实例，添加到readStates
+	// raft 模块也有一个 for-loop 的 goroutine，来读取该数组，并对MsgReadIndex进行响应
+	if req.From == None || req.From == r.id {
+		r.readStates = append(r.readStates, ReadState{
+			Index:      readIndex,
+			RequestCtx: req.Entries[0].Data,
+		})
+		return pb.Message{}
+	}
+	...
+}
+```
 
+如果当前只有一个节点，那么当前的节点也是leader节点，所有的只读请求，将会发送到leader，leader直接对信息进行处理  
 
 ### 总结
 
+etcd中对于写的请求，因为所有的写请求都是通过leader的，leader的确认机制将会保证消息复制到大多数节点中；  
 
+对于只读的请求，同样也是需要全部转发到leader节点中，通过ReadIndex算法，来实现线性一致性读；  
+
+Leader执行ReadIndex大致的流程如下：
+
+- 1、记录当前的commit index，称为ReadIndex；  
+
+- 2、向Follower发起一次心跳，如果大多数节点回复了，那就能确定现在仍然是Leader；  
+
+- 3、等待状态机的apply index大于或等于commited index时才读取数据；    
+
+- 4、执行读请求，将结果返回给Client。 
 
 ### 参考
 
