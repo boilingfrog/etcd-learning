@@ -10,8 +10,14 @@
     - [CP without A](#cp-without-a)
   - [线性一致性](#%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7-1)
   - [etcd中如何实现线性一致性](#etcd%E4%B8%AD%E5%A6%82%E4%BD%95%E5%AE%9E%E7%8E%B0%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7)
-    - [线性一致性写](#%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7%E5%86%99)
-    - [线性一致性读](#%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7%E8%AF%BB)
+  - [线性一致性写](#%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7%E5%86%99)
+  - [线性一致性读](#%E7%BA%BF%E6%80%A7%E4%B8%80%E8%87%B4%E6%80%A7%E8%AF%BB)
+    - [1、客户端的get请求](#1%E5%AE%A2%E6%88%B7%E7%AB%AF%E7%9A%84get%E8%AF%B7%E6%B1%82)
+    - [2、服务端响应读取请求](#2%E6%9C%8D%E5%8A%A1%E7%AB%AF%E5%93%8D%E5%BA%94%E8%AF%BB%E5%8F%96%E8%AF%B7%E6%B1%82)
+    - [3、raft中如何处理一个读的请求](#3raft%E4%B8%AD%E5%A6%82%E4%BD%95%E5%A4%84%E7%90%86%E4%B8%80%E4%B8%AA%E8%AF%BB%E7%9A%84%E8%AF%B7%E6%B1%82)
+      - [如果follower收到只读的消息](#%E5%A6%82%E6%9E%9Cfollower%E6%94%B6%E5%88%B0%E5%8F%AA%E8%AF%BB%E7%9A%84%E6%B6%88%E6%81%AF)
+      - [如果leader收到只读请求](#%E5%A6%82%E6%9E%9Cleader%E6%94%B6%E5%88%B0%E5%8F%AA%E8%AF%BB%E8%AF%B7%E6%B1%82)
+  - [总结](#%E6%80%BB%E7%BB%93)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -62,7 +68,7 @@ CAP理论：一个分布式系统最多只能同时满足一致性（Consistency
 
 ### etcd中如何实现线性一致性
 
-#### 线性一致性写
+### 线性一致性写
 
 所有的写操作，都要经过leader节点，一旦leader被选举成功，就可以对客户端提供服务了。客户端提交每一条命令都会被按顺序记录到leader的日志中，每一条命令都包含term编号和顺序索引，然后向其他节点并行发送AppendEntries RPC用以复制命令(如果命令丢失会不断重发)，当复制成功也就是大多数节点成功复制后，leader就会提交命令，即执行该命令并且将执行结果返回客户端，raft保证已经提交的命令最终也会被其他节点成功执行。具体源码参见[日志同步](https://www.cnblogs.com/ricklz/p/15155095.html#%E6%97%A5%E5%BF%97%E5%90%8C%E6%AD%A5)      
 
@@ -72,7 +78,7 @@ CAP理论：一个分布式系统最多只能同时满足一致性（Consistency
 
 如何实现读取的线性一致性，就需要引入ReadIndex了  
 
-#### 线性一致性读  
+### 线性一致性读  
 
 ReadIndex算法：  
 
@@ -104,7 +110,7 @@ Leader执行ReadIndex大致的流程如下：
 
 进一步来看下etcd的源码是如何实现的呢  
 
-**1、客户端的get请求**  
+#### 1、客户端的get请求
 
 ```go
 func (kv *kv) Get(ctx context.Context, key string, opts ...OpOption) (*GetResponse, error) {
@@ -159,7 +165,7 @@ service KV {
 
 可以看到get的请求最终通过通过rpc发送到Range  
 
-**2、服务端响应读取请求**  
+#### 2、服务端响应读取请求
 
 ```go
 // etcd/server/etcdserver/raft.go
@@ -258,7 +264,7 @@ func (s *EtcdServer) linearizableReadLoop() {
 
 服务端对于读的操作，如果是Linearizable Read，也就是线性一致性的读，最终会通过linearizableReadLoop，监听readwaitc来触发，阻塞直到`apply index >= read index`，最终发送可以读取的信息。  
 
-**3、raft中如何处理一个读的请求**
+#### 3、raft中如何处理一个读的请求
 
 linearizableReadLoop收到readwaitc，最终会调用sendReadIndex  
 
@@ -280,7 +286,17 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 
 通过MsgReadIndex的消息来发送读的请求  
 
-follower接收到MsgReadIndex类型的消息，会将这个消息发送到leader
+- 如果follower收到了客户端的MsgReadIndex类型的消息，因为客户端不能处理只读请求，需要将消息转发到leader节点进行处理；  
+
+- 如果是leader收到了MsgReadIndex；  
+
+1、如果消息来自客户端，直接写入到readStates，start函数会将readStates中最后的一个放到readStateC，通知上游的处理结果；  
+
+2、如果消息来自follower，通过消息MsgReadIndexResp回复follower的响应结果；  
+
+##### 如果follower收到只读的消息
+
+follower会将消息转发到leader  
 
 ```go
 // etcd/raft/raft.go
@@ -398,7 +414,25 @@ func (r *raft) responseToReadIndexReq(req pb.Message, readIndex uint64) pb.Messa
 }
 ```
 
-来看下客户端发到leader的信息，是如何处理的  
+然后follower收到响应，将MsgReadIndex消息中的已提交位置和消息id封装成ReadState实例，添加到readStates  
+
+```go
+func stepFollower(r *raft, m pb.Message) error {
+	switch m.Type {
+	case pb.MsgReadIndexResp:
+		if len(m.Entries) != 1 {
+			r.logger.Errorf("%x invalid format of MsgReadIndexResp from %x, entries count: %d", r.id, m.From, len(m.Entries))
+			return nil
+		}
+		// 将MsgReadIndex消息中的已提交位置和消息id封装成ReadState实例，添加到readStates
+		// raft 模块也有一个 for-loop 的 goroutine，来读取该数组，并对MsgReadIndex进行响应
+		r.readStates = append(r.readStates, ReadState{Index: m.Index, RequestCtx: m.Entries[0].Data})
+	}
+	return nil
+}
+```
+
+raft 模块有一个for-loop的goroutine，来读取该数组，并对MsgReadIndex进行响应，将ReadStates中的最后一项将写入到readStateC中，通过监听readStateC的linearizableReadLoop函数的结果。  
 
 ```go
 // etcd/server/etcdserver/raft.goetcd/raft/node.go
@@ -431,25 +465,15 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 }
 ```
 
-如果信息是follower发送到leader  
+##### 如果leader收到只读请求
 
-```go
-func stepFollower(r *raft, m pb.Message) error {
-	switch m.Type {
-	case pb.MsgReadIndexResp:
-		if len(m.Entries) != 1 {
-			r.logger.Errorf("%x invalid format of MsgReadIndexResp from %x, entries count: %d", r.id, m.From, len(m.Entries))
-			return nil
-		}
-		// 将MsgReadIndex消息中的已提交位置和消息id封装成ReadState实例，添加到readStates
-		// raft 模块也有一个 for-loop 的 goroutine，来读取该数组，并对MsgReadIndex进行响应
-		r.readStates = append(r.readStates, ReadState{Index: m.Index, RequestCtx: m.Entries[0].Data})
-	}
-	return nil
-}
-```
 
-如果是客户端直接发送到follower中的消息，因为follower不能处理，会将消息发送到leader，然后等待leader的响应，然后回复client。  
+
+
+
+### 总结
+
+
 
 ### 参考
 
