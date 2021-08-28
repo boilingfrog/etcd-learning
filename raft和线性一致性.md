@@ -162,6 +162,7 @@ service KV {
 **2、服务端响应读取请求**  
 
 ```go
+// etcd/server/etcdserver/raft.go
 func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeResponse, error) {
 	...
 	// 判断是否需要serializable read  
@@ -180,6 +181,7 @@ func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeRe
 	return resp, err
 }
 
+// etcd/server/etcdserver/raft.go
 func (s *EtcdServer) linearizableReadNotify(ctx context.Context) error {
 	s.readMu.RLock()
 	nc := s.readNotifier
@@ -210,6 +212,7 @@ func (s *EtcdServer) Start() {
 	...
 }
 
+// etcd/server/etcdserver/raft.go
 func (s *EtcdServer) linearizableReadLoop() {
 	for {
 		requestId := s.reqIDGen.Next()
@@ -221,6 +224,17 @@ func (s *EtcdServer) linearizableReadLoop() {
 		case <-s.readwaitc:
 		case <-s.stopping:
 			return
+		}
+		...
+		// 处理不同的消息
+		// 这里会监听readwaitc，等待MsgReadIndex信息的处理结果
+		confirmedIndex, err := s.requestCurrentIndex(leaderChangedNotifier, requestId)
+		if isStopped(err) {
+			return
+		}
+		if err != nil {
+			nr.notify(err)
+			continue
 		}
 
 		...
@@ -347,6 +361,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			return nil
 		}
 
+		// 响应节点超过半数，会清空readOnly中指定消息ID及之前的所有记录
 		rss := r.readOnly.advance(m)
 		for _, rs := range rss {
 			if resp := r.responseToReadIndexReq(rs.req, rs.index); resp.To != None {
@@ -356,24 +371,86 @@ func stepLeader(r *raft, m pb.Message) error {
 	}
 	return nil
 }
+
+// responseToReadIndexReq 为 `req` 构造一个响应。如果`req`来自对等方
+// 本身，将返回一个空值。
+func (r *raft) responseToReadIndexReq(req pb.Message, readIndex uint64) pb.Message {
+	// 通过from来判断该消息是否是follower节点转发到leader中的
+
+	// 如果是客户端直接发到leader节点的消息，将MsgReadIndex消息中的已提交位置和消息id封装成ReadState实例，添加到readStates
+	// raft 模块也有一个 for-loop 的 goroutine，来读取该数组，并对MsgReadIndex进行响应
+	if req.From == None || req.From == r.id {
+		r.readStates = append(r.readStates, ReadState{
+			Index:      readIndex,
+			RequestCtx: req.Entries[0].Data,
+		})
+		return pb.Message{}
+	}
+
+	// 如果是其他follower节点转发到leader节点的MsgReadIndex消息
+	// leader会回向follower节点返回响应的MsgReadIndexResp消息，follower会响应给client
+	return pb.Message{
+		Type:    pb.MsgReadIndexResp,
+		To:      req.From,
+		Index:   readIndex,
+		Entries: req.Entries,
+	}
+}
 ```
 
+来看下客户端发到leader的信息，是如何处理的  
 
+```go
+// etcd/server/etcdserver/raft.goetcd/raft/node.go
+func (r *raftNode) start(rh *raftReadyHandler) {
+	internalTimeout := time.Second
 
+	go func() {
+		defer r.onStop()
+		islead := false
 
+		for {
+			select {
+			case rd := <-r.Ready():
+				...
+				if len(rd.ReadStates) != 0 {
+					select {
+					// ReadStates中最后意向将会被写入到readStateC中
+					// linearizableReadLoop会监听readStateC，获取MsgReadIndex的处理信息
+					case r.readStateC <- rd.ReadStates[len(rd.ReadStates)-1]:
+					case <-time.After(internalTimeout):
+						r.lg.Warn("timed out sending read state", zap.Duration("timeout", internalTimeout))
+					case <-r.stopped:
+						return
+					}
+				}
+				...
+			}
+		}
+	}()
+}
+```
 
+如果信息是follower发送到leader  
 
+```go
+func stepFollower(r *raft, m pb.Message) error {
+	switch m.Type {
+	case pb.MsgReadIndexResp:
+		if len(m.Entries) != 1 {
+			r.logger.Errorf("%x invalid format of MsgReadIndexResp from %x, entries count: %d", r.id, m.From, len(m.Entries))
+			return nil
+		}
+		// 将MsgReadIndex消息中的已提交位置和消息id封装成ReadState实例，添加到readStates
+		// raft 模块也有一个 for-loop 的 goroutine，来读取该数组，并对MsgReadIndex进行响应
+		r.readStates = append(r.readStates, ReadState{Index: m.Index, RequestCtx: m.Entries[0].Data})
+	}
+	return nil
+}
+```
 
+如果是客户端直接发送到follower中的消息，因为follower不能处理，会将消息发送到leader，然后等待leader的响应，然后回复client。  
 
-
-
-
-
- 
-
-
-
-            
 ### 参考
 
 【CAP定理】https://zh.wikipedia.org/wiki/CAP%E5%AE%9A%E7%90%86  
