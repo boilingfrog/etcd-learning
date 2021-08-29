@@ -297,6 +297,8 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 
 ##### 如果follower收到只读的消息
 
+<img src="/img/etcd-raft-read-follower.png" alt="etcd" align=center/>
+
 follower会将消息转发到leader  
 
 ```go
@@ -462,6 +464,8 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 ```
 
 ##### 如果leader收到只读请求
+
+<img src="/img/etcd-raft-read-leader.png" alt="etcd" align=center/>
 
 ```go
 func stepLeader(r *raft, m pb.Message) error {
