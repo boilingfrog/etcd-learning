@@ -282,7 +282,6 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 	return n.step(ctx, pb.Message{Type: pb.MsgReadIndex, Entries: []pb.Entry{{Data: rctx}}})
 }
 ```
-总结：  
 
 通过MsgReadIndex的消息来发送读的请求  
 
@@ -293,6 +292,8 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 1、如果消息来自客户端，直接写入到readStates，start函数会将readStates中最后的一个放到readStateC，通知上游的处理结果；  
 
 2、如果消息来自follower，通过消息MsgReadIndexResp回复follower的响应结果；  
+
+我们知道ReadIndex算法中，leader节点需要，向follower节点发起心跳，确认自己的leader地位，具体的就是通过ReadOnly来实现,下面会一一介绍到  
 
 ##### 如果follower收到只读的消息
 
@@ -342,9 +343,11 @@ func sendMsgReadIndexResponse(r *raft, m pb.Message) {
 	switch r.readOnly.option {
 	// If more than the local vote is needed, go through a full broadcast.
 	case ReadOnlySafe:
-		// 将只读请求添加到readonly struct中
+		// 清空readOnly中指定消息ID及之前的所有记录
+		// 开启leader向follower的确认机制
 		r.readOnly.addRequest(r.raftLog.committed, m)
-		//recvAck通知只读结构raft状态机已收到对附加只读请求上下文的心跳信号的确认。
+		// recvAck通知只读结构raft状态机已收到对附加只读请求上下文的心跳信号的确认。
+		// 也就是记录下只读的请求
 		r.readOnly.recvAck(r.id, m.Entries[0].Data)
 		// leader 节点向其他节点发起广播
 		r.bcastHeartbeatWithCtx(m.Entries[0].Data)
@@ -373,12 +376,15 @@ func stepLeader(r *raft, m pb.Message) error {
 			return nil
 		}
 
+		// 判断leader有没有收到大多数节点的确认
+		// 也就是ReadIndex算法中，leader节点得到follower的确认，证明自己目前还是Leader
 		if r.prs.Voters.VoteResult(r.readOnly.recvAck(m.From, m.Context)) != quorum.VoteWon {
 			return nil
 		}
 
-		// 响应节点超过半数，会清空readOnly中指定消息ID及之前的所有记录
+		// 收到了响应节点超过半数，会清空readOnly中指定消息ID及之前的所有记录
 		rss := r.readOnly.advance(m)
+		// 返回follower的心跳回执
 		for _, rs := range rss {
 			if resp := r.responseToReadIndexReq(rs.req, rs.index); resp.To != None {
 				r.send(resp)
