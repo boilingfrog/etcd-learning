@@ -12,6 +12,9 @@
 [etcd学习(5)-etcd的Raft一致性算法原理](https://www.cnblogs.com/ricklz/p/15094389.html)    
 
 [etcd学习(6)-etcd实现raft源码解读](https://www.cnblogs.com/ricklz/p/15155095.html)     
+
+[etcd学习(7)-etcd中如何实现线性一致性](https://www.cnblogs.com/ricklz/p/15204381.html)     
+
  
 
 

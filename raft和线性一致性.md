@@ -226,7 +226,7 @@ func (s *EtcdServer) linearizableReadLoop() {
 		select {
 		case <-leaderChangedNotifier:
 			continue
-			// 在client发起一次Linearizable Read的时候，会向readwaitc写入一个空的结构体作为信号
+		// 在client发起一次Linearizable Read的时候，会向readwaitc写入一个空的结构体作为信号
 		case <-s.readwaitc:
 		case <-s.stopping:
 			return
