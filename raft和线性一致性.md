@@ -294,7 +294,7 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 
 2、如果消息来自follower，通过消息MsgReadIndexResp回复follower的响应结果，同时follower也是会将readStates中最后的一个放到readStateC，通知上游的处理结果；  
 
-上面的linearizableReadLoop监听readStateC，当收到请求，获取当前leader已经提交的日志索引，然后等待直到状态机已应用索引 (applied index) 大于等于 Leader 的已提交索引时 (committed Index)，然后去通知读请求，数据已赶上 Leader，你可以去状态机中访问数据了，处理数据返回给客户端  
+上面的linearizableReadLoop监听readStateC，当收到请求，获取当前leader已经提交的日志索引，然后等待直到状态机已应用索引 (applied index) 大于等于 Leader 的已提交索引时 (committed Index)，然后去通知读请求，数据已赶上 Leader，就可以去状态机中访问数据了，处理数据返回给客户端  
 
 我们知道ReadIndex算法中，leader节点需要，向follower节点发起心跳，确认自己的leader地位，具体的就是通过ReadOnly来实现,下面会一一介绍到  
 
