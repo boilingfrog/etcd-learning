@@ -168,7 +168,7 @@ service KV {
 #### 2、服务端响应读取请求
 
 ```go
-// etcd/server/etcdserver/raft.go
+// etcd/server/etcdserver/v3_server.go
 func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeResponse, error) {
 	...
 	// 判断是否需要serializable read  
@@ -187,7 +187,7 @@ func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeRe
 	return resp, err
 }
 
-// etcd/server/etcdserver/raft.go
+// etcd/server/etcdserver/v3_server.go
 func (s *EtcdServer) linearizableReadNotify(ctx context.Context) error {
 	s.readMu.RLock()
 	nc := s.readNotifier
@@ -218,7 +218,7 @@ func (s *EtcdServer) Start() {
 	...
 }
 
-// etcd/server/etcdserver/raft.go
+// etcd/server/etcdserver/v3_server.go
 func (s *EtcdServer) linearizableReadLoop() {
 	for {
 		requestId := s.reqIDGen.Next()
@@ -233,7 +233,8 @@ func (s *EtcdServer) linearizableReadLoop() {
 		}
 		...
 		// 处理不同的消息
-		// 这里会监听readwaitc，等待MsgReadIndex信息的处理结果
+		// 这里会监听readwaitc，等待MsgReadIndex信息的处理结果 
+		// 同时获取当前已提交的日志索引
 		confirmedIndex, err := s.requestCurrentIndex(leaderChangedNotifier, requestId)
 		if isStopped(err) {
 			return
@@ -291,7 +292,9 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 
 1、如果消息来自客户端，直接写入到readStates，start函数会将readStates中最后的一个放到readStateC，通知上游的处理结果；  
 
-2、如果消息来自follower，通过消息MsgReadIndexResp回复follower的响应结果；  
+2、如果消息来自follower，通过消息MsgReadIndexResp回复follower的响应结果，同时follower也是会将readStates中最后的一个放到readStateC，通知上游的处理结果；  
+
+上面的linearizableReadLoop监听readStateC，当收到请求，获取当前leader已经提交的日志索引，然后等待直到状态机已应用索引 (applied index) 大于等于 Leader 的已提交索引时 (committed Index)，然后去通知读请求，数据已赶上 Leader，你可以去状态机中访问数据了，处理数据返回给客户端  
 
 我们知道ReadIndex算法中，leader节点需要，向follower节点发起心跳，确认自己的leader地位，具体的就是通过ReadOnly来实现,下面会一一介绍到  
 
