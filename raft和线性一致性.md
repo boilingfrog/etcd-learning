@@ -519,7 +519,7 @@ etcd中对于写的请求，因为所有的写请求都是通过leader的，lead
 
 对于只读的请求，同样也是需要全部转发到leader节点中，通过ReadIndex算法，来实现线性一致性读；  
 
-Leader执行ReadIndex大致的流程如下：
+raft执行ReadIndex大致的流程如下：
 
 - 1、记录当前的commit index，称为ReadIndex；  
 
