@@ -26,70 +26,57 @@
 
 <img src="/img/etcd-lease.png" alt="grpc" align=center/>
 
-来看下Lease中的几个主要函数  
+来看下服务端中Lease中的几个主要函数  
 
 ```go
+// etcd/server/lease/lessor.go
 // Lessor owns leases. It can grant, revoke, renew and modify leases for lessee.
 type Lessor interface {
-	// SetRangeDeleter lets the lessor create TxnDeletes to the store.
-	// Lessor deletes the items in the revoked or expired lease by creating
-	// new TxnDeletes.
-	SetRangeDeleter(rd RangeDeleter)
-
-	SetCheckpointer(cp Checkpointer)
-
-	// Grant grants a lease that expires at least after TTL seconds.
-	Grant(id LeaseID, ttl int64) (*Lease, error)
-	// Revoke revokes a lease with given ID. The item attached to the
-	// given lease will be removed. If the ID does not exist, an error
-	// will be returned.
-	Revoke(id LeaseID) error
-
-	// Checkpoint applies the remainingTTL of a lease. The remainingTTL is used in Promote to set
-	// the expiry of leases to less than the full TTL when possible.
-	Checkpoint(id LeaseID, remainingTTL int64) error
-
-	// Attach attaches given leaseItem to the lease with given LeaseID.
-	// If the lease does not exist, an error will be returned.
-	Attach(id LeaseID, items []LeaseItem) error
-
-	// GetLease returns LeaseID for given item.
-	// If no lease found, NoLease value will be returned.
-	GetLease(item LeaseItem) LeaseID
-
-	// Detach detaches given leaseItem from the lease with given LeaseID.
-	// If the lease does not exist, an error will be returned.
-	Detach(id LeaseID, items []LeaseItem) error
-
-	// Promote promotes the lessor to be the primary lessor. Primary lessor manages
-	// the expiration and renew of leases.
-	// Newly promoted lessor renew the TTL of all lease to extend + previous TTL.
-	Promote(extend time.Duration)
-
-	// Demote demotes the lessor from being the primary lessor.
-	Demote()
-
-	// Renew renews a lease with given ID. It returns the renewed TTL. If the ID does not exist,
-	// an error will be returned.
-	Renew(id LeaseID) (int64, error)
-
-	// Lookup gives the lease at a given lease id, if any
-	Lookup(id LeaseID) *Lease
-
-	// Leases lists all leases.
-	Leases() []*Lease
-
-	// ExpiredLeasesC returns a chan that is used to receive expired leases.
-	ExpiredLeasesC() <-chan []*Lease
-
-	// Recover recovers the lessor state from the given backend and RangeDeleter.
-	Recover(b backend.Backend, rd RangeDeleter)
-
-	// Stop stops the lessor for managing leases. The behavior of calling Stop multiple
-	// times is undefined.
-	Stop()
+    ...
+    // Grant 表示创建一个 TTL 为你指定秒数的 Lease
+    Grant(id LeaseID, ttl int64) (*Lease, error)
+    // Revoke 撤销具有给定 ID 的租约
+    Revoke(id LeaseID) error
+    
+    // 将给定的租约附加到具有给定 LeaseID 的租约。
+    Attach(id LeaseID, items []LeaseItem) error
+    
+    // Renew 使用给定的 ID 续订租约。它返回更新后的 TTL
+    Renew(id LeaseID) (int64, error)
+    ...
 }
 ```
+
+同时对于客户端 Lease 也提供了下面几个API    
+
+```go
+// etcd/client/v3/lease.go
+type Lease interface {
+    // Grant 表示创建一个 TTL 为你指定秒数的 Lease，Lessor 会将 Lease 信息持久化存储在 boltdb 中；
+	Grant(ctx context.Context, ttl int64) (*LeaseGrantResponse, error)
+
+	// 表示撤销 Lease 并删除其关联的数据；
+	Revoke(ctx context.Context, id LeaseID) (*LeaseRevokeResponse, error)
+
+	// 表示获取一个 Lease 的有效期、剩余时间；
+	TimeToLive(ctx context.Context, id LeaseID, opts ...LeaseOption) (*LeaseTimeToLiveResponse, error)
+
+	// Leases retrieves all leases.
+	Leases(ctx context.Context) (*LeaseLeasesResponse, error)
+
+    // 表示为 Lease 续期
+	KeepAlive(ctx context.Context, id LeaseID) (<-chan *LeaseKeepAliveResponse, error)
+
+    // 使用once只在第一次调用
+	KeepAliveOnce(ctx context.Context, id LeaseID) (*LeaseKeepAliveResponse, error)
+
+	// Close releases all resources Lease keeps for efficient communication
+	// with the etcd server.
+	Close() error
+}
+```
+
+
 
 
 
