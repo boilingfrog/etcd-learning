@@ -1,11 +1,11 @@
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [etcd中的Lease](#etcd%E4%B8%AD%E7%9A%84lease)
   - [前言](#%E5%89%8D%E8%A8%80)
   - [Lease](#lease)
-    - [Lease 整体架构](#lease-%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84)
+  - [Lease 整体架构](#lease-%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84)
+  - [key 如何关联 Lease](#key-%E5%A6%82%E4%BD%95%E5%85%B3%E8%81%94-lease)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -20,7 +20,7 @@
 
 ### Lease
 
-#### Lease 整体架构
+### Lease 整体架构
 
 这里放一个来自【etcd实战课程】的一张图片  
 
@@ -52,7 +52,7 @@ type Lessor interface {
 ```go
 // etcd/client/v3/lease.go
 type Lease interface {
-    // Grant 表示创建一个 TTL 为你指定秒数的 Lease，Lessor 会将 Lease 信息持久化存储在 boltdb 中；
+	// Grant 表示创建一个 TTL 为你指定秒数的 Lease，Lessor 会将 Lease 信息持久化存储在 boltdb 中；
 	Grant(ctx context.Context, ttl int64) (*LeaseGrantResponse, error)
 
 	// 表示撤销 Lease 并删除其关联的数据；
@@ -64,10 +64,10 @@ type Lease interface {
 	// Leases retrieves all leases.
 	Leases(ctx context.Context) (*LeaseLeasesResponse, error)
 
-    // 表示为 Lease 续期
+	// 表示为 Lease 续期
 	KeepAlive(ctx context.Context, id LeaseID) (<-chan *LeaseKeepAliveResponse, error)
 
-    // 使用once只在第一次调用
+	// 使用once只在第一次调用
 	KeepAliveOnce(ctx context.Context, id LeaseID) (*LeaseKeepAliveResponse, error)
 
 	// Close releases all resources Lease keeps for efficient communication
@@ -76,7 +76,92 @@ type Lease interface {
 }
 ```
 
+服务端在启动 Lessor 模块的时候，会启动两个 goroutine ，`revokeExpiredLeases()` 和 `checkpointScheduledLeases()` 。  
 
+- revokeExpiredLeases: 定时检查是否有过期 Lease，发起撤销过期的 Lease 操作;  
+
+- checkpointScheduledLeases: 定时触发更新 Lease 的剩余到期时间的操作;  
+
+```go
+func newLessor(lg *zap.Logger, b backend.Backend, cfg LessorConfig) *lessor {
+	...
+	l := &lessor{
+		...
+	}
+	l.initAndRecover()
+
+	go l.runLoop()
+
+	return l
+}
+
+func (le *lessor) runLoop() {
+	defer close(le.doneC)
+
+	for {
+		le.revokeExpiredLeases()
+		le.checkpointScheduledLeases()
+
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-le.stopC:
+			return
+		}
+	}
+}
+
+// revokeExpiredLeases 找到所有过期的租约，并将它们发送到过期通道被撤销
+func (le *lessor) revokeExpiredLeases() {
+	var ls []*Lease
+
+	// rate limit
+	revokeLimit := leaseRevokeRate / 2
+
+	le.mu.RLock()
+	if le.isPrimary() {
+		ls = le.findExpiredLeases(revokeLimit)
+	}
+	le.mu.RUnlock()
+
+	if len(ls) != 0 {
+		select {
+		case <-le.stopC:
+			return
+		case le.expiredC <- ls:
+		default:
+			// the receiver of expiredC is probably busy handling
+			// other stuff
+			// let's try this next time after 500ms
+		}
+	}
+}
+
+
+// checkpointScheduledLeases 查找所有到期的预定租约检查点将它们提交给检查点以将它们持久化到共识日志中。
+func (le *lessor) checkpointScheduledLeases() {
+	var cps []*pb.LeaseCheckpoint
+
+	// rate limit
+	for i := 0; i < leaseCheckpointRate/2; i++ {
+		le.mu.Lock()
+		if le.isPrimary() {
+			cps = le.findDueScheduledCheckpoints(maxLeaseCheckpointBatchSize)
+		}
+		le.mu.Unlock()
+
+		if len(cps) != 0 {
+			le.cp(context.Background(), &pb.LeaseCheckpointRequest{Checkpoints: cps})
+		}
+		if len(cps) < maxLeaseCheckpointBatchSize {
+			return
+		}
+	}
+}
+```
+
+我们可以看到对于`revokeExpiredLeases()` 和 `checkpointScheduledLeases()` 的操作，定时是500毫秒处理一次，直到收到退出的信息。    
+
+### key 如何关联 Lease  
 
 
 
