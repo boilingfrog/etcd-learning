@@ -17,6 +17,7 @@
     - [3、raft中如何处理一个读的请求](#3raft%E4%B8%AD%E5%A6%82%E4%BD%95%E5%A4%84%E7%90%86%E4%B8%80%E4%B8%AA%E8%AF%BB%E7%9A%84%E8%AF%B7%E6%B1%82)
       - [如果follower收到只读的消息](#%E5%A6%82%E6%9E%9Cfollower%E6%94%B6%E5%88%B0%E5%8F%AA%E8%AF%BB%E7%9A%84%E6%B6%88%E6%81%AF)
       - [如果leader收到只读请求](#%E5%A6%82%E6%9E%9Cleader%E6%94%B6%E5%88%B0%E5%8F%AA%E8%AF%BB%E8%AF%B7%E6%B1%82)
+  - [MVCC](#mvcc)
   - [总结](#%E6%80%BB%E7%BB%93)
   - [参考](#%E5%8F%82%E8%80%83)
 
@@ -512,6 +513,17 @@ func (r *raft) responseToReadIndexReq(req pb.Message, readIndex uint64) pb.Messa
 ```
 
 如果当前只有一个节点，那么当前的节点也是leader节点，所有的只读请求，将会发送到leader，leader直接对信息进行处理  
+
+### MVCC
+
+`Multiversion concurrency control`简称MVCC。这个模块是为了解决 etcd v2 不支持保存 key 的历史版本、不支持多 key 事务等问题而产生的。  
+
+它核心由内存树形索引模块 (treeIndex) 和嵌入式的 KV 持久化存储库 boltdb 组成。  
+
+treeIndex 与 boltdb 关系如下面的读事务流程图所示，从 treeIndex 中获取 key hello 的版本号，再以版本号作为 boltdb 的 key，从 boltdb 中获取其 value 信息。  
+
+<img src="/img/etcd-mvcc.png" alt="etcd" align=center/>
+
 
 ### 总结
 
