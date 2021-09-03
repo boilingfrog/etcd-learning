@@ -18,6 +18,9 @@
       - [如果follower收到只读的消息](#%E5%A6%82%E6%9E%9Cfollower%E6%94%B6%E5%88%B0%E5%8F%AA%E8%AF%BB%E7%9A%84%E6%B6%88%E6%81%AF)
       - [如果leader收到只读请求](#%E5%A6%82%E6%9E%9Cleader%E6%94%B6%E5%88%B0%E5%8F%AA%E8%AF%BB%E8%AF%B7%E6%B1%82)
   - [MVCC](#mvcc)
+    - [treeIndex](#treeindex)
+    - [buffer](#buffer)
+    - [boltdb](#boltdb)
   - [总结](#%E6%80%BB%E7%BB%93)
   - [参考](#%E5%8F%82%E8%80%83)
 
@@ -514,16 +517,35 @@ func (r *raft) responseToReadIndexReq(req pb.Message, readIndex uint64) pb.Messa
 
 如果当前只有一个节点，那么当前的节点也是leader节点，所有的只读请求，将会发送到leader，leader直接对信息进行处理  
 
+如何从状态机中访问数据了，就需要了解下MVCC了  
+
 ### MVCC
 
 `Multiversion concurrency control`简称MVCC。这个模块是为了解决 etcd v2 不支持保存 key 的历史版本、不支持多 key 事务等问题而产生的。  
 
 它核心由内存树形索引模块 (treeIndex) 和嵌入式的 KV 持久化存储库 boltdb 组成。  
 
+那么 etcd 如何基于 boltdb 保存一个 key 的多个历史版本呢?  
+
+每次修改操作，生成一个新的版本号 (revision)，以版本号为 key， value 为用户 key-value 等信息组成的结构体。boltdb 的 key 是全局递增的版本号 (revision)，value 是用户 key、value 等字段组合成的结构体，然后通过 treeIndex 模块来保存用户 key 和版本号的映射关系。  
+
 treeIndex 与 boltdb 关系如下面的读事务流程图所示，从 treeIndex 中获取 key hello 的版本号，再以版本号作为 boltdb 的 key，从 boltdb 中获取其 value 信息。  
 
 <img src="/img/etcd-mvcc.png" alt="etcd" align=center/>
 
+#### treeIndex
+
+treeIndex 模块是基于 Google 开源的内存版 btree 库实现的
+
+treeIndex 模块只会保存用户的 key 和相关版本号信息，用户 key 的 value 数据存储在 boltdb 里面，相比 ZooKeeper 和 etcd v2 全内存存储，etcd v3 对内存要求更低。  
+
+#### buffer  
+
+在获取到版本号信息后，就可从 boltdb 模块中获取用户的 key-value 数据了。不过有一点你要注意，并不是所有请求都一定要从 boltdb 获取数据。etcd 出于数据一致性、性能等考虑，在访问 boltdb 前，首先会从一个内存读事务 buffer 中，二分查找你要访问 key 是否在 buffer 里面，若命中则直接返回。  
+
+#### boltdb
+
+boltdb 使用 B+ tree 来组织用户的 key-value 数据，获取 bucket key 对象后，通过 boltdb 的游标 Cursor 可快速在 B+ tree 找到 key hello 对应的 value 数据，返回给 client。  
 
 ### 总结
 
@@ -540,6 +562,8 @@ raft执行ReadIndex大致的流程如下：
 - 3、等待状态机的apply index大于或等于commited index时才读取数据；    
 
 - 4、执行读请求，将结果返回给Client。 
+
+关于状态机数据的读取，首先从treeIndex获取版本号，然后在buffer是否有对应的值，没有就去boltdb查询对应的值  
 
 ### 参考
 
