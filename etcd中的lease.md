@@ -235,7 +235,7 @@ func (le *lessor) Grant(id LeaseID, ttl int64) (*Lease, error) {
 }
 ```
 
-首先 Lessor 的 Grant 接口会把 Lease 保存到内存的 leaseMap 数据结构中，将数据数据保存到 boltdb 的 Lease bucket 中，返回给客户端 leaseId   
+首先 Lessor 的 Grant 接口会把 Lease 保存到内存的 ItemMap 数据结构中，将数据数据保存到 boltdb 的 Lease bucket 中，返回给客户端 leaseId   
 
 当然 Grant 只是申请了一个 Lease，将 key 和 Lease 进行关联的操作是在 Attach 中完成的  
 
@@ -251,8 +251,8 @@ func (le *lessor) Attach(id LeaseID, items []LeaseItem) error {
 	}
 
 	l.mu.Lock()
-    // 将租约放到itemMap
-    // 一个租约是可以关联多个key的
+	// 将租约放到itemMap
+	// 一个租约是可以关联多个key的
 	for _, it := range items {
 		l.itemSet[it] = struct{}{}
 		le.itemMap[it] = id
