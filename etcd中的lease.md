@@ -6,6 +6,10 @@
   - [Lease](#lease)
   - [Lease 整体架构](#lease-%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84)
   - [key 如何关联 Lease](#key-%E5%A6%82%E4%BD%95%E5%85%B3%E8%81%94-lease)
+  - [Lease的续期](#lease%E7%9A%84%E7%BB%AD%E6%9C%9F)
+  - [过期 Lease 的删除](#%E8%BF%87%E6%9C%9F-lease-%E7%9A%84%E5%88%A0%E9%99%A4)
+  - [checkpoint 机制](#checkpoint-%E6%9C%BA%E5%88%B6)
+  - [总结](#%E6%80%BB%E7%BB%93)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -490,15 +494,120 @@ etcd v3 通过复用 lease 和引入 gRPC，提高了续期的效率
 
 ### 过期 Lease 的删除
 
-上面的代码我们介绍了 etcd 在启动 lease 的时候会启动一个
+上面的代码我们介绍了 etcd 在启动 lease 的时候会启动一个 goroutine revokeExpiredLeases(),他会没500毫秒执行一次清除操作。  
 
+```go
+func (le *lessor) runLoop() {
+	defer close(le.doneC)
 
+	for {
+		// 函数最终调用expireExists来完成清除操作
+		le.revokeExpiredLeases()
+		le.checkpointScheduledLeases()
 
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-le.stopC:
+			return
+		}
+	}
+}
 
+// expireExists returns true if expiry items exist.
+// It pops only when expiry item exists.
+// "next" is true, to indicate that it may exist in next attempt.
+func (le *lessor) expireExists() (l *Lease, ok bool, next bool) {
+	if le.leaseExpiredNotifier.Len() == 0 {
+		return nil, false, false
+	}
 
+	item := le.leaseExpiredNotifier.Poll()
+	l = le.leaseMap[item.id]
+	if l == nil {
+		// lease has expired or been revoked
+		// no need to revoke (nothing is expiry)
+		le.leaseExpiredNotifier.Unregister() // O(log N)
+		return nil, false, true
+	}
+	now := time.Now()
+	if now.Before(item.time) /* item.time: expiration time */ {
+		// Candidate expirations are caught up, reinsert this item
+		// and no need to revoke (nothing is expiry)
+		return l, false, false
+	}
 
+	// recheck if revoke is complete after retry interval
+	item.time = now.Add(le.expiredLeaseRetryInterval)
+	le.leaseExpiredNotifier.RegisterOrUpdate(item)
+	return l, true, false
+}
+```
 
+etcd Lease 高效淘汰方案最小堆的实现方法的，每次新增 Lease、续期的时候，它会插入、更新一个对象到最小堆中，对象含有 LeaseID 和其到期时间 unixnano，对象之间按到期时间升序排序。  
 
+etcd Lessor 主循环每隔 500ms 执行一次撤销 Lease 检查（RevokeExpiredLease），每次轮询堆顶的元素，若已过期则加入到待淘汰列表，直到堆顶的 Lease 过期时间大于当前，则结束本轮轮询。  
+
+Lessor 模块会将已确认过期的 LeaseID，保存在一个名为 expiredC 的 channel 中，而 etcd server 的主循环会定期从 channel 中获取 LeaseID，发起 revoke 请求，通过 Raft Log 传递给 Follower 节点。  
+
+各个节点收到 revoke Lease 请求后，获取关联到此 Lease 上的 key 列表，从 boltdb 中删除 key，从 Lessor 的 Lease map 内存中删除此 Lease 对象，最后还需要从 boltdb 的 Lease bucket 中删除这个 Lease。  
+
+```go
+// revokeExpiredLeases finds all leases past their expiry and sends them to expired channel for
+// to be revoked.
+func (le *lessor) revokeExpiredLeases() {
+	var ls []*Lease
+
+	// rate limit
+	revokeLimit := leaseRevokeRate / 2
+
+	le.mu.RLock()
+	if le.isPrimary() {
+		ls = le.findExpiredLeases(revokeLimit)
+	}
+	le.mu.RUnlock()
+
+	if len(ls) != 0 {
+		select {
+		case <-le.stopC:
+			return
+			// 已经过期的lease会被放入到expiredC中，然后被上游进行处理
+		case le.expiredC <- ls:
+		default:
+			// the receiver of expiredC is probably busy handling
+			// other stuff
+			// let's try this next time after 500ms
+		}
+	}
+}
+```
+
+### checkpoint 机制
+
+对于 lease 的处理都是发生在 leader 节点，如果leader节点挂掉了呢？我们知道会重新发起选举选出新的 leader，那么问题就来了  
+
+当你的集群发生 Leader 切换后，新的 Leader 基于 Lease map 信息，按 Lease 过期时间构建一个最小堆时，etcd 早期版本为了优化性能，并未持久化存储 Lease 剩余 TTL 信息，因此重建的时候就会自动给所有 Lease 自动续期了。  
+
+然而若较频繁出现 Leader 切换，切换时间小于 Lease 的 TTL，这会导致 Lease 永远无法删除，大量 key 堆积，db 大小超过配额等异常。  
+
+为了解决这个问题，所以引入了 checkpoint 机制  
+
+一方面，etcd 启动的时候，Leader 节点后台会运行此异步任务，定期批量地将 Lease 剩余的 TTL 基于 Raft Log 同步给 Follower 节点，Follower 节点收到 CheckPoint 请求后，更新内存数据结构 LeaseMap 的剩余 TTL 信息。  
+
+另一方面，当 Leader 节点收到 KeepAlive 请求的时候，它也会通过 checkpoint 机制把此 Lease 的剩余 TTL 重置，并同步给 Follower 节点，尽量确保续期后集群各个节点的 Lease 剩余 TTL 一致性。  
+
+### 总结  
+
+对于 TTL 的选择，TTL 过长会导致节点异常后，无法及时从 etcd 中删除，影响服务可用性，而过短，则要求 client 频繁发送续期请求。  
+
+etcd v3 通过复用 lease 和引入 gRPC，提高了续期的效率  
+
+1、etcd v3 版本引入了 lease,上面的代码我们也可以看到，不同 key 若 TTL 相同，可复用同一个 Lease， 显著减少了 Lease 数。    
+
+2、同时 etcd v3 版本引入了 gRPC 。通过 gRPC HTTP/2 实现了多路复用，流式传输，同一连接可支持为多个 Lease 续期，能够大大减少连接数，提高续期的效率。    
+
+Lease 中过期的删除，使用的结构是最小堆，主循环每隔 500ms 执行一次撤销 Lease 检查（RevokeExpiredLease），每次轮询堆顶的元素，若已过期则加入到待淘汰列表，直到堆顶的 Lease 过期时间大于当前，则结束本轮轮询。  
+
+如果 leader 发生频繁节点切换，切换时间小于 Lease 的 TTL，这会导致 Lease 永远无法删除，大量 key 堆积，db 大小超过配额等异常，引入了 checkpoint 机制。  
 
 ### 参考  
 
