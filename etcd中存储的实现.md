@@ -5,6 +5,8 @@
   - [前言](#%E5%89%8D%E8%A8%80)
   - [V3和V2版本的对比](#v3%E5%92%8Cv2%E7%89%88%E6%9C%AC%E7%9A%84%E5%AF%B9%E6%AF%94)
   - [MVCC](#mvcc)
+    - [treeIndex 原理](#treeindex-%E5%8E%9F%E7%90%86)
+    - [MVCC 更新 key](#mvcc-%E6%9B%B4%E6%96%B0-key)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -87,6 +89,76 @@ type generation struct {
 	revs    []revision // 每次修改key时的revision追加到此数组
 }
 ```
+
+再来看下 revision  
+
+```go
+// A revision indicates modification of the key-value space.
+// The set of changes that share same main revision changes the key-value space atomically.
+type revision struct {
+	// 一个全局递增的主版本号，随put/txn/delete事务递增，一个事务内的key main版本号是一致的
+	main int64
+
+	// 一个事务内的子版本号，从0开始随事务内put/delete操作递增
+	sub int64
+}
+```
+
+看完基本的数据结构，我们来看下 mvcc 对 key 的操作流程  
+
+#### MVCC 更新 key
+
+执行 put 操作的时候首先从 treeIndex 模块中查询 key 的 keyIndex 索引信息，keyIndex 在上面已经介绍了。  
+
+- 如果首次操作，也就是 treeIndex 中找不到对应的，etcd 会根据当前的全局版本号（空集群启动时默认为 1）自增，生成 put 操作对应的版本号 revision{2,0}，这就是 boltdb 的 key。  
+
+- 如果能找到，在当前的 keyIndex append 一个操作的 revision  
+
+```go
+func (ti *treeIndex) Put(key []byte, rev revision) {
+	keyi := &keyIndex{key: key}
+
+	ti.Lock()
+	defer ti.Unlock()
+	item := ti.tree.Get(keyi)
+	// 没有找到
+	if item == nil {
+		keyi.put(ti.lg, rev.main, rev.sub)
+		ti.tree.ReplaceOrInsert(keyi)
+		return
+	}
+	okeyi := item.(*keyIndex)
+	okeyi.put(ti.lg, rev.main, rev.sub)
+}
+
+// put puts a revision to the keyIndex.
+func (ki *keyIndex) put(lg *zap.Logger, main int64, sub int64) {
+	rev := revision{main: main, sub: sub}
+
+	if !rev.GreaterThan(ki.modified) {
+		lg.Panic(
+			"'put' with an unexpected smaller revision",
+			zap.Int64("given-revision-main", rev.main),
+			zap.Int64("given-revision-sub", rev.sub),
+			zap.Int64("modified-revision-main", ki.modified.main),
+			zap.Int64("modified-revision-sub", ki.modified.sub),
+		)
+	}
+	if len(ki.generations) == 0 {
+		ki.generations = append(ki.generations, generation{})
+	}
+	g := &ki.generations[len(ki.generations)-1]
+	if len(g.revs) == 0 { // create a new key
+		keysGauge.Inc()
+		g.created = rev
+	}
+	g.revs = append(g.revs, rev)
+	g.ver++
+	ki.modified = rev
+}
+```
+
+
 
 
 
