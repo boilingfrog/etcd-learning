@@ -7,6 +7,7 @@
   - [MVCC](#mvcc)
     - [treeIndex 原理](#treeindex-%E5%8E%9F%E7%90%86)
     - [MVCC 更新 key](#mvcc-%E6%9B%B4%E6%96%B0-key)
+  - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -115,6 +116,7 @@ type revision struct {
 - 如果能找到，在当前的 keyIndex append 一个操作的 revision  
 
 ```go
+// etcd/server/mvcc/index.go
 func (ti *treeIndex) Put(key []byte, rev revision) {
 	keyi := &keyIndex{key: key}
 
@@ -131,19 +133,11 @@ func (ti *treeIndex) Put(key []byte, rev revision) {
 	okeyi.put(ti.lg, rev.main, rev.sub)
 }
 
+// etcd/server/mvcc/key_index.go
 // put puts a revision to the keyIndex.
 func (ki *keyIndex) put(lg *zap.Logger, main int64, sub int64) {
 	rev := revision{main: main, sub: sub}
 
-	if !rev.GreaterThan(ki.modified) {
-		lg.Panic(
-			"'put' with an unexpected smaller revision",
-			zap.Int64("given-revision-main", rev.main),
-			zap.Int64("given-revision-sub", rev.sub),
-			zap.Int64("modified-revision-main", ki.modified.main),
-			zap.Int64("modified-revision-sub", ki.modified.sub),
-		)
-	}
 	if len(ki.generations) == 0 {
 		ki.generations = append(ki.generations, generation{})
 	}
@@ -158,8 +152,197 @@ func (ki *keyIndex) put(lg *zap.Logger, main int64, sub int64) {
 }
 ```
 
+填充完 treeIndex ，这时候就会将数据保存到 boltdb 的缓存中，并同步更新 buffer  
+
+下来看下 Backend 的细节， etcd 中通过 Backend，很好的封装了存储引擎的实现细节，为上层提供一个更一致的接口，方便了 etcd 中其他模块的使用  
+
+```go
+// etcd/server/mvcc/backend/backend.go
+type Backend interface {
+	// ReadTx 返回一个读事务。它被主数据路径中的 ConcurrentReadTx 替换
+	ReadTx() ReadTx
+	BatchTx() BatchTx
+	// ConcurrentReadTx returns a non-blocking read transaction.
+	ConcurrentReadTx() ReadTx
+
+	Snapshot() Snapshot
+	Hash(ignores func(bucketName, keyName []byte) bool) (uint32, error)
+	// Size 返回后端物理分配的当前大小。
+	Size() int64
+	// SizeInUse 返回逻辑上正在使用的后端的当前大小。
+	SizeInUse() int64
+	OpenReadTxN() int64
+	Defrag() error
+	ForceCommit()
+	Close() error
+}
+```
+
+再来看下 pacakge 内部的 backend 结构体，这是一个实现了 Backend 接口的结构：  
+
+```go
+// etcd/server/mvcc/backend/backend.go
+type backend struct {
+	// size and commits are used with atomic operations so they must be
+	// 64-bit aligned, otherwise 32-bit tests will crash
+
+	// size is the number of bytes allocated in the backend
+	size int64
+	// sizeInUse is the number of bytes actually used in the backend
+	sizeInUse int64
+	// commits counts number of commits since start
+	commits int64
+	// openReadTxN is the number of currently open read transactions in the backend
+	openReadTxN int64
+	// mlock prevents backend database file to be swapped
+	mlock bool
+
+	mu sync.RWMutex
+	db *bolt.DB
+
+	// 默认100ms
+	batchInterval time.Duration
+	// 默认defaultBatchLimit    = 10000
+	batchLimit    int
+	batchTx       *batchTxBuffered
+
+	readTx *readTx
+	// txReadBufferCache mirrors "txReadBuffer" within "readTx" -- readTx.baseReadTx.buf.
+	// When creating "concurrentReadTx":
+	// - if the cache is up-to-date, "readTx.baseReadTx.buf" copy can be skipped
+	// - if the cache is empty or outdated, "readTx.baseReadTx.buf" copy is required
+	txReadBufferCache txReadBufferCache
+
+	stopc chan struct{}
+	donec chan struct{}
+
+	hooks Hooks
+
+	lg *zap.Logger
+}
+```
+
+readTx 和 batchTx 分别实现了 ReadTx 和 BatchTx 接口，其中 readTx 负责读请求，batchTx 负责写请求  
+
+```go
+// etcd/server/mvcc/backend/read_tx.go
+type ReadTx interface {
+	Lock()
+	Unlock()
+	RLock()
+	RUnlock()
+
+	UnsafeRange(bucket Bucket, key, endKey []byte, limit int64) (keys [][]byte, vals [][]byte)
+	UnsafeForEach(bucket Bucket, visitor func(k, v []byte) error) error
+}
+
+// etcd/server/mvcc/backend/batch_tx.go
+type BatchTx interface {
+	ReadTx
+	UnsafeCreateBucket(bucket Bucket)
+	UnsafeDeleteBucket(bucket Bucket)
+	UnsafePut(bucket Bucket, key []byte, value []byte)
+	UnsafeSeqPut(bucket Bucket, key []byte, value []byte)
+	UnsafeDelete(bucket Bucket, key []byte)
+	// Commit commits a previous tx and begins a new writable one.
+	Commit()
+	// CommitAndStop commits the previous tx and does not create a new one.
+	CommitAndStop()
+}
+```
+
+readTx 和 batchTx 的创建在 newBackend 中完成  
+
+```go
+func newBackend(bcfg BackendConfig) *backend {
+	if bcfg.Logger == nil {
+		bcfg.Logger = zap.NewNop()
+	}
+
+	bopts := &bolt.Options{}
+	if boltOpenOptions != nil {
+		*bopts = *boltOpenOptions
+	}
+	bopts.InitialMmapSize = bcfg.mmapSize()
+	bopts.FreelistType = bcfg.BackendFreelistType
+	bopts.NoSync = bcfg.UnsafeNoFsync
+	bopts.NoGrowSync = bcfg.UnsafeNoFsync
+	bopts.Mlock = bcfg.Mlock
+
+	db, err := bolt.Open(bcfg.Path, 0600, bopts)
+	if err != nil {
+		bcfg.Logger.Panic("failed to open database", zap.String("path", bcfg.Path), zap.Error(err))
+	}
+
+	// In future, may want to make buffering optional for low-concurrency systems
+	// or dynamically swap between buffered/non-buffered depending on workload.
+	b := &backend{
+		db: db,
+
+		batchInterval: bcfg.BatchInterval,
+		batchLimit:    bcfg.BatchLimit,
+		mlock:         bcfg.Mlock,
+
+		readTx: &readTx{
+			baseReadTx: baseReadTx{
+				buf: txReadBuffer{
+					txBuffer:   txBuffer{make(map[BucketID]*bucketBuffer)},
+					bufVersion: 0,
+				},
+				buckets: make(map[BucketID]*bolt.Bucket),
+				txWg:    new(sync.WaitGroup),
+				txMu:    new(sync.RWMutex),
+			},
+		},
+		txReadBufferCache: txReadBufferCache{
+			mu:         sync.Mutex{},
+			bufVersion: 0,
+			buf:        nil,
+		},
+
+		stopc: make(chan struct{}),
+		donec: make(chan struct{}),
+
+		lg: bcfg.Logger,
+	}
+
+	b.batchTx = newBatchTxBuffered(b)
+	// We set it after newBatchTxBuffered to skip the 'empty' commit.
+	b.hooks = bcfg.Hooks
+
+	go b.run()
+	return b
+}
+
+func (b *backend) run() {
+	defer close(b.donec)
+	// 定时提交事务
+	t := time.NewTimer(b.batchInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+		case <-b.stopc:
+			b.batchTx.CommitAndStop()
+			return
+		}
+		if b.batchTx.safePending() != 0 {
+			b.batchTx.Commit()
+		}
+		t.Reset(b.batchInterval)
+	}
+}
+```
+
+newBackend 在启动的时候会开启一个 goroutine ，定期的提交事务   
 
 
+
+
+
+### 参考
+
+【etcd Backend存储引擎实现原理】https://blog.csdn.net/u010853261/article/details/109630223    
 
 
 
