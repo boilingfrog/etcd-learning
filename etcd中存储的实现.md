@@ -7,7 +7,9 @@
   - [MVCC](#mvcc)
     - [treeIndex 原理](#treeindex-%E5%8E%9F%E7%90%86)
     - [MVCC 更新 key](#mvcc-%E6%9B%B4%E6%96%B0-key)
+    - [只读事务](#%E5%8F%AA%E8%AF%BB%E4%BA%8B%E5%8A%A1)
   - [参考](#%E5%8F%82%E8%80%83)
+  - [参考](#%E5%8F%82%E8%80%83-1)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -336,13 +338,130 @@ func (b *backend) run() {
 
 newBackend 在启动的时候会开启一个 goroutine ，定期的提交事务   
 
+#### 只读事务
 
+来看下只读事务的现实  
+
+```go
+// Base type for readTx and concurrentReadTx to eliminate duplicate functions between these
+type baseReadTx struct {
+	// 保护 txReadBuffer 的访问
+	mu  sync.RWMutex
+	buf txReadBuffer
+
+	// 保护 tx
+	txMu    *sync.RWMutex
+	tx      *bolt.Tx
+	buckets map[BucketID]*bolt.Bucket
+	// txWg 保护 tx 在批处理间隔结束时不会被回滚，直到使用此 tx 的所有读取完成。
+	txWg *sync.WaitGroup
+}
+```
+
+可以引入了两把读写锁来保护相应的资源，除了用于保护 tx 的 txmu 读写锁之外，还存在另外一个 mu 读写锁，它的作用是保证 buf 中的数据不会出现问题，buf 和结构体中的 buckets 都是用于加速读效率的缓存。  
+
+它对位提供了两个方法 UnsafeRange 和 UnsafeForEach  
+
+UnsafeRange 从名字就可以答题推断出这个函数的作用就是做范围查询。  
+
+```go
+func (baseReadTx *baseReadTx) UnsafeRange(bucketType Bucket, key, endKey []byte, limit int64) ([][]byte, [][]byte) {
+	if endKey == nil {
+		// forbid duplicates for single keys
+		limit = 1
+	}
+	if limit <= 0 {
+		limit = math.MaxInt64
+	}
+	if limit > 1 && !bucketType.IsSafeRangeBucket() {
+		panic("do not use unsafeRange on non-keys bucket")
+	}
+    // 首先从缓存中查询键值对
+	keys, vals := baseReadTx.buf.Range(bucketType, key, endKey, limit)
+    // 检测缓存中返回的键值对是否达到Limit的要求，如果达到Limit的指定上限，直接返回缓存的查询结果
+	if int64(len(keys)) == limit {
+		return keys, vals
+	}
+
+	// find/cache bucket
+	bn := bucketType.ID()
+	baseReadTx.txMu.RLock()
+	bucket, ok := baseReadTx.buckets[bn]
+	baseReadTx.txMu.RUnlock()
+	lockHeld := false
+	if !ok {
+		baseReadTx.txMu.Lock()
+		lockHeld = true
+		bucket = baseReadTx.tx.Bucket(bucketType.Name())
+		baseReadTx.buckets[bn] = bucket
+	}
+
+	// ignore missing bucket since may have been created in this batch
+	if bucket == nil {
+		if lockHeld {
+			baseReadTx.txMu.Unlock()
+		}
+		return keys, vals
+	}
+	if !lockHeld {
+		baseReadTx.txMu.Lock()
+	}
+	c := bucket.Cursor()
+	baseReadTx.txMu.Unlock()
+
+    // 将查询缓存的结采与查询 BlotDB 的结果合并 然后返回
+	k2, v2 := unsafeRange(c, key, endKey, limit-int64(len(keys)))
+	return append(k2, keys...), append(v2, vals...)
+}
+
+func unsafeRange(c *bolt.Cursor, key, endKey []byte, limit int64) (keys [][]byte, vs [][]byte) {
+	if limit <= 0 {
+		limit = math.MaxInt64
+	}
+	var isMatch func(b []byte) bool
+	if len(endKey) > 0 {
+		isMatch = func(b []byte) bool { return bytes.Compare(b, endKey) < 0 }
+	} else {
+		isMatch = func(b []byte) bool { return bytes.Equal(b, key) }
+		limit = 1
+	}
+
+	for ck, cv := c.Seek(key); ck != nil && isMatch(ck); ck, cv = c.Next() {
+		vs = append(vs, cv)
+		keys = append(keys, ck)
+		if limit == int64(len(keys)) {
+			break
+		}
+	}
+	return keys, vs
+}
+```
+
+梳理下流程：  
+
+1、首先从baseReadTx的buf里面查询，如果从buf里面已经拿到了足够的KV(入参里面有限制range查询的最大数量)，那么就直接返回拿到的KVs;  
+  
+2、如果buf里面的KV不足以满足要求，那么这里就会利用 BoltDB的读事务接口去BoltDB 里面查询KV，然后返回。  
+
+
+### 参考
+
+【etcd Backend存储引擎实现原理】https://blog.csdn.net/u010853261/article/details/109630223    
+【高可用分布式存储 etcd 的实现原理】https://draveness.me/etcd-introduction/    
+
+
+
+
+
+ForEach
 
 
 
 ### 参考
 
 【etcd Backend存储引擎实现原理】https://blog.csdn.net/u010853261/article/details/109630223    
+【高可用分布式存储 etcd 的实现原理】https://draveness.me/etcd-introduction/    
+
 
 
 
