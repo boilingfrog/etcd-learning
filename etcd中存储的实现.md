@@ -8,8 +8,8 @@
     - [treeIndex 原理](#treeindex-%E5%8E%9F%E7%90%86)
     - [MVCC 更新 key](#mvcc-%E6%9B%B4%E6%96%B0-key)
     - [只读事务](#%E5%8F%AA%E8%AF%BB%E4%BA%8B%E5%8A%A1)
+    - [读写事务](#%E8%AF%BB%E5%86%99%E4%BA%8B%E5%8A%A1)
   - [参考](#%E5%8F%82%E8%80%83)
-  - [参考](#%E5%8F%82%E8%80%83-1)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -364,7 +364,10 @@ type baseReadTx struct {
 
 UnsafeRange 从名字就可以答题推断出这个函数的作用就是做范围查询。  
 
+在 etcd 中无论我们想要后去单个 Key 还是一个范围内的 Key 最终都是通过 Range 来实现的  
+
 ```go
+// etcd/server/mvcc/backend/read_tx.go
 func (baseReadTx *baseReadTx) UnsafeRange(bucketType Bucket, key, endKey []byte, limit int64) ([][]byte, [][]byte) {
 	if endKey == nil {
 		// forbid duplicates for single keys
@@ -443,17 +446,93 @@ func unsafeRange(c *bolt.Cursor, key, endKey []byte, limit int64) (keys [][]byte
   
 2、如果buf里面的KV不足以满足要求，那么这里就会利用 BoltDB的读事务接口去BoltDB 里面查询KV，然后返回。  
 
+#### 读写事务  
 
-### 参考
+读写事务提供了读和写的数据的能力  
 
-【etcd Backend存储引擎实现原理】https://blog.csdn.net/u010853261/article/details/109630223    
-【高可用分布式存储 etcd 的实现原理】https://draveness.me/etcd-introduction/    
+```go
+type batchTx struct {
+	sync.Mutex
+	tx      *bolt.Tx
+	backend *backend
+
+	pending int
+}
+```
+
+写数据的请求会调用 UnsafePut 写入数据到 BoltDB 中  
+
+```go
+// go.etcd.io/bbolt@v1.3.6/tx.go
+// UnsafePut must be called holding the lock on the tx.
+func (t *batchTx) UnsafePut(bucket Bucket, key []byte, value []byte) {
+	t.unsafePut(bucket, key, value, false)
+}
+
+func (t *batchTx) unsafePut(bucketType Bucket, key []byte, value []byte, seq bool) {
+	// 获取bucket的实例
+	bucket := t.tx.Bucket(bucketType.Name())
+	if bucket == nil {
+		...
+	}
+	if seq {
+		// 如果顺序写入，将填充率设置成90%
+		bucket.FillPercent = 0.9
+	}
+	// 使用 BoltDB 的 put 写入数据
+	if err := bucket.Put(key, value); err != nil {
+        ...
+	}
+	t.pending++
+}
+```
+
+数据存储到 BoltDB 中，BoltDB本身提供了 Put 的写入 API  
+
+UnsafeDelete 和这个差不多，跳过  
+
+在执行 PUT 和 DELETE 之后，数据没有提交，我们还需要手动或者等待 etcd 自动将请求提交：  
+
+```go
+// etcd/server/mvcc/backend/batch_tx.go
+// Commit commits a previous tx and begins a new writable one.
+func (t *batchTx) Commit() {
+	t.Lock()
+	t.commit(false)
+	t.Unlock()
+}
+
+func (t *batchTx) commit(stop bool) {
+	// commit the last tx
+	if t.tx != nil {
+		if t.pending == 0 && !stop {
+			return
+		}
+
+		start := time.Now()
+
+		// gofail: var beforeCommit struct{}
+		err := t.tx.Commit()
+		// gofail: var afterCommit struct{}
+
+		rebalanceSec.Observe(t.tx.Stats().RebalanceTime.Seconds())
+		spillSec.Observe(t.tx.Stats().SpillTime.Seconds())
+		writeSec.Observe(t.tx.Stats().WriteTime.Seconds())
+		commitSec.Observe(time.Since(start).Seconds())
+		atomic.AddInt64(&t.backend.commits, 1)
+
+		t.pending = 0
+		if err != nil {
+			t.backend.lg.Fatal("failed to commit tx", zap.Error(err))
+		}
+	}
+	if !stop {
+		t.tx = t.backend.begin(true)
+	}
+}
+```
 
 
-
-
-
-ForEach
 
 
 
