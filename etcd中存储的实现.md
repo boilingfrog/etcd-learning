@@ -7,6 +7,9 @@
   - [MVCC](#mvcc)
     - [treeIndex 原理](#treeindex-%E5%8E%9F%E7%90%86)
     - [MVCC 更新 key](#mvcc-%E6%9B%B4%E6%96%B0-key)
+    - [MVCC 查询 key](#mvcc-%E6%9F%A5%E8%AF%A2-key)
+    - [MVCC 删除 key](#mvcc-%E5%88%A0%E9%99%A4-key)
+  - [boltdb 存储](#boltdb-%E5%AD%98%E5%82%A8)
     - [只读事务](#%E5%8F%AA%E8%AF%BB%E4%BA%8B%E5%8A%A1)
     - [读写事务](#%E8%AF%BB%E5%86%99%E4%BA%8B%E5%8A%A1)
   - [参考](#%E5%8F%82%E8%80%83)
@@ -155,6 +158,103 @@ func (ki *keyIndex) put(lg *zap.Logger, main int64, sub int64) {
 ```
 
 填充完 treeIndex ，这时候就会将数据保存到 boltdb 的缓存中，并同步更新 buffer  
+
+#### MVCC 查询 key
+
+在读事务中，它首先需要根据 key 从 treeIndex 模块获取版本号，如果未带版本号，默认是读取最新的数据。treeIndex 模块从 B-tree 中，根据 key 查找到 keyIndex 对象后，匹配有效的 generation，返回 generation 的 revisions 数组中最后一个版本号给读事务对象。  
+
+读事务对象根据此版本号为 key，通过 Backend 的并发读事务（ConcurrentReadTx）接口，优先从 buffer 中查询，命中则直接返回，否则从 boltdb 中查询此 key 的 value 信息。具体可参见下文的只读事务。  
+
+当然上面是查找最新的数据，如果我们查询历史中的某一个版本的信息呢？  
+
+处理过程是一样的，只不过是根据 key 从 treeIndex 模块获取版本号，不是获取最新的，而是获取小于等于 我们指定的版本号 的最大历史版本号，然后再去查询对应的值信息。   
+
+```go
+// etcd/server/mvcc/index.go
+func (ti *treeIndex) Get(key []byte, atRev int64) (modified, created revision, ver int64, err error) {
+	keyi := &keyIndex{key: key}
+	ti.RLock()
+	defer ti.RUnlock()
+	if keyi = ti.keyIndex(keyi); keyi == nil {
+		return revision{}, revision{}, 0, ErrRevisionNotFound
+	}
+	return keyi.get(ti.lg, atRev)
+}
+
+// get gets the modified, created revision and version of the key that satisfies the given atRev.
+// Rev must be higher than or equal to the given atRev.
+func (ki *keyIndex) get(lg *zap.Logger, atRev int64) (modified, created revision, ver int64, err error) {
+	if ki.isEmpty() {
+		lg.Panic(
+			"'get' got an unexpected empty keyIndex",
+			zap.String("key", string(ki.key)),
+		)
+	}
+	g := ki.findGeneration(atRev)
+	if g.isEmpty() {
+		return revision{}, revision{}, 0, ErrRevisionNotFound
+	}
+
+	n := g.walk(func(rev revision) bool { return rev.main > atRev })
+	if n != -1 {
+		return g.revs[n], g.created, g.ver - int64(len(g.revs)-n-1), nil
+	}
+
+	return revision{}, revision{}, 0, ErrRevisionNotFound
+}
+
+// 找出给定的 rev 所属的 generation
+func (ki *keyIndex) findGeneration(rev int64) *generation {
+	lastg := len(ki.generations) - 1
+	cg := lastg
+
+	for cg >= 0 {
+		if len(ki.generations[cg].revs) == 0 {
+			cg--
+			continue
+		}
+		g := ki.generations[cg]
+		if cg != lastg {
+			if tomb := g.revs[len(g.revs)-1].main; tomb <= rev {
+				return nil
+			}
+		}
+		if g.revs[0].main <= rev {
+			return &ki.generations[cg]
+		}
+		cg--
+	}
+	return nil
+}
+```
+
+关于从获取 key 的 value 信息的过程可参考下文的 只读事务。  
+
+#### MVCC 删除 key  
+
+再来看下删除的逻辑  
+
+etcd 中的删除操作，是延期删除模式，和更新 key 类似  
+
+相比更新操作：  
+
+1、生成的 boltdb key 版本号追加了删除标识（tombstone, 简写 t），boltdb value 变成只含用户 key 的 KeyValue 结构体；  
+
+2、treeIndex 模块也会给此 key hello 对应的 keyIndex 对象，追加一个空的 generation 对象，表示此索引对应的 key 被删除了；   
+
+当你再次查询对应 key 的时候，treeIndex 模块根据 key 查找到 keyindex 对象后，若发现其存在空的 generation 对象，并且查询的版本号大于等于被删除时的版本号，则会返回空。    
+
+那么 key 打上删除标记后有哪些用途呢？什么时候会真正删除它呢？  
+
+一方面删除 key 时会生成 events，Watch 模块根据 key 的删除标识，会生成对应的 Delete 事件。  
+
+另一方面，当你重启 etcd，遍历 boltdb 中的 key 构建 treeIndex 内存树时，你需要知道哪些 key 是已经被删除的，并为对应的 key 索引生成 tombstone 标识。而真正删除 treeIndex 中的索引对象、boltdb 中的 key 是通过压缩 (compactor) 组件异步完成。  
+
+正因为 etcd 的删除 key 操作是基于以上延期删除原理实现的，因此只要压缩组件未回收历史版本，我们就能从 etcd 中找回误删的数据。  
+
+
+
+### boltdb 存储
 
 下来看下 Backend 的细节， etcd 中通过 Backend，很好的封装了存储引擎的实现细节，为上层提供一个更一致的接口，方便了 etcd 中其他模块的使用  
 
@@ -442,9 +542,9 @@ func unsafeRange(c *bolt.Cursor, key, endKey []byte, limit int64) (keys [][]byte
 
 梳理下流程：  
 
-1、首先从baseReadTx的buf里面查询，如果从buf里面已经拿到了足够的KV(入参里面有限制range查询的最大数量)，那么就直接返回拿到的KVs;  
+1、首先从 baseReadTx 的 buf 里面查询，如果从 buf 里面已经拿到了足够的 KV (入参里面有限制 range 查询的最大数量)，那么就直接返回拿到的 KVs;  
   
-2、如果buf里面的KV不足以满足要求，那么这里就会利用 BoltDB的读事务接口去BoltDB 里面查询KV，然后返回。  
+2、如果 buf 里面的KV不足以满足要求，那么这里就会利用 BoltDB 的读事务接口去 BoltDB 里面查询 KV，然后返回。  
 
 #### 读写事务  
 
@@ -487,7 +587,7 @@ func (t *batchTx) unsafePut(bucketType Bucket, key []byte, value []byte, seq boo
 }
 ```
 
-数据存储到 BoltDB 中，BoltDB本身提供了 Put 的写入 API  
+数据存储到 BoltDB 中，BoltDB 本身提供了 Put 的写入 API  
 
 UnsafeDelete 和这个差不多，跳过  
 
@@ -505,13 +605,14 @@ func (t *batchTx) Commit() {
 func (t *batchTx) commit(stop bool) {
 	// commit the last tx
 	if t.tx != nil {
+		// 前读写事务未做任何修改就无须开启新的事务
 		if t.pending == 0 && !stop {
 			return
 		}
 
 		start := time.Now()
 
-		// gofail: var beforeCommit struct{}
+		// 通过 BoltDB 提供的api提交当前的事务
 		err := t.tx.Commit()
 		// gofail: var afterCommit struct{}
 
@@ -519,18 +620,23 @@ func (t *batchTx) commit(stop bool) {
 		spillSec.Observe(t.tx.Stats().SpillTime.Seconds())
 		writeSec.Observe(t.tx.Stats().WriteTime.Seconds())
 		commitSec.Observe(time.Since(start).Seconds())
+		// 增加 backend.commits 数量
 		atomic.AddInt64(&t.backend.commits, 1)
 
+		// 重置 pending 的数量
 		t.pending = 0
 		if err != nil {
 			t.backend.lg.Fatal("failed to commit tx", zap.Error(err))
 		}
 	}
 	if !stop {
+		// 开启新的读写事务
 		t.tx = t.backend.begin(true)
 	}
 }
 ```
+
+事务的提交到这就介绍完了  
 
 
 
