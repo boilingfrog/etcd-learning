@@ -12,6 +12,7 @@
   - [boltdb 存储](#boltdb-%E5%AD%98%E5%82%A8)
     - [只读事务](#%E5%8F%AA%E8%AF%BB%E4%BA%8B%E5%8A%A1)
     - [读写事务](#%E8%AF%BB%E5%86%99%E4%BA%8B%E5%8A%A1)
+  - [总结](#%E6%80%BB%E7%BB%93)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -252,7 +253,46 @@ etcd 中的删除操作，是延期删除模式，和更新 key 类似
 
 正因为 etcd 的删除 key 操作是基于以上延期删除原理实现的，因此只要压缩组件未回收历史版本，我们就能从 etcd 中找回误删的数据。  
 
+```go
+// etcd/server/mvcc/kvstore_txn.go
+func (tw *storeTxnWrite) delete(key []byte) {
+	ibytes := newRevBytes()
+	idxRev := revision{main: tw.beginRev + 1, sub: int64(len(tw.changes))}
+	revToBytes(idxRev, ibytes)
 
+	ibytes = appendMarkTombstone(tw.storeTxnRead.s.lg, ibytes)
+
+	kv := mvccpb.KeyValue{Key: key}
+
+	d, err := kv.Marshal()
+	if err != nil {
+		...
+	}
+
+	tw.tx.UnsafeSeqPut(buckets.Key, ibytes, d)
+	err = tw.s.kvindex.Tombstone(key, idxRev)
+	if err != nil {
+		...
+	}
+	tw.changes = append(tw.changes, kv)
+
+	item := lease.LeaseItem{Key: string(key)}
+	leaseID := tw.s.le.GetLease(item)
+
+	if leaseID != lease.NoLease {
+		err = tw.s.le.Detach(leaseID, []lease.LeaseItem{item})
+		if err != nil {
+			...
+		}
+	}
+}
+```
+
+删除操作会向结构体中的 generation 追加一个新的 tombstone 标记，用于标识当前的 Key 已经被删除；除此之外，上述方法还会将每一个更新操作的 revision 存到单独的 keyBucketName 中  
+
+```
+var	Key  = backend.Bucket(bucket{id: 1, name: keyBucketName, safeRangeBucket: true})
+```
 
 ### boltdb 存储
 
@@ -638,14 +678,20 @@ func (t *batchTx) commit(stop bool) {
 
 事务的提交到这就介绍完了  
 
+### 总结
 
+1、treeIndex 模块基于 Google 开源的 btree 库实现，它的核心数据结构 keyIndex，保存了用户 key 与版本号关系。每次修改 key 都会生成新的版本号，生成新的 boltdb key-value。boltdb 的 key 为版本号，value 包含用户 key-value、各种版本号、lease 的 mvccpb.KeyValue 结构体。  
 
+2、如果我们不带版本号查询的时候，返回的是最新的数据，如果携带版本号，将会返回版本对应的快照信息；  
 
+3、删除一个数据时，etcd 并未真正删除它，而是基于 lazy delete 实现的异步删除。删除原理本质上与更新操作类似，只不过 boltdb 的 key 会打上删除标记，keyIndex 索引中追加空的 generation。真正删除 key 是通过 etcd 的压缩组件去异步实现的；  
 
 ### 参考
 
 【etcd Backend存储引擎实现原理】https://blog.csdn.net/u010853261/article/details/109630223    
 【高可用分布式存储 etcd 的实现原理】https://draveness.me/etcd-introduction/    
+【如何实现多版本并发控制？】https://time.geekbang.org/column/article/340226  
+【etcd v3.5.0】https://github.com/etcd-io/etcd/releases/tag/v3.5.0  
 
 
 
