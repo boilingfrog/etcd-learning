@@ -336,6 +336,16 @@ etcd server 启动后，根据你的配置的模式 periodic，会创建 periodi
 
 etcd 启动后会根据你的压缩模式 revision，创建 revision Compactor。revision Compactor 会根据你设置的保留版本号数，每隔 5 分钟定时获取当前 server 的最大版本号，减去你想保留的历史版本数，然后通过 etcd server 的 Compact 接口发起如下的压缩操作即可。  
 
+压缩后 db 的大小会不会减少呢？   
+
+boltdb 将 db 文件划分成若干个 page 页，page 页又有四种类型，分别是 meta page、branch page、leaf page 以及 freelist page。branch page 保存 B+ tree 的非叶子节点 key 数据，leaf page 保存 bucket 和 key-value 数据，freelist 会记录哪些页是空闲的。  
+
+当我们通过 boltdb 删除大量的 key，在事务提交后 B+ tree 经过分裂、平衡，会释放出若干 branch/leaf page 页面，然而 boltdb 并不会将其释放给磁盘，调整 db 大小操作是昂贵的，会对性能有较大的损害。  
+
+boltdb 是通过 freelist page 记录这些空闲页的分布位置，当收到新的写请求时，优先从空闲页数组中申请若干连续页使用，实现高性能的读写（而不是直接扩大 db 大小）。当连续空闲页申请无法得到满足的时候， boltdb 才会通过增大 db 大小来补充空闲页。  
+
+所以压缩之后释放的空闲页可以满足后续的新增写请求的空闲页需求,db 的打消会趋于稳定  
+
 ### boltdb 存储
 
 下来看下 Backend 的细节， etcd 中通过 Backend，很好的封装了存储引擎的实现细节，为上层提供一个更一致的接口，方便了 etcd 中其他模块的使用  
