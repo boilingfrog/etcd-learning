@@ -13,7 +13,13 @@
 
 [etcd学习(6)-etcd实现raft源码解读](https://www.cnblogs.com/ricklz/p/15155095.html)     
 
-[etcd学习(7)-etcd中如何实现线性一致性](https://www.cnblogs.com/ricklz/p/15204381.html)     
+[etcd学习(7)-etcd中如何实现线性一致性](https://www.cnblogs.com/ricklz/p/15204381.html)    
+
+[etcd学习(8)-etcd中的lease](https://www.cnblogs.com/ricklz/p/15232204.html)     
+
+[etcd学习(9)-etcd中的存储实现](https://www.cnblogs.com/ricklz/p/15253404.html)     
+
+ 
 
  
 
