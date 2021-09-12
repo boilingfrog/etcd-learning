@@ -71,6 +71,19 @@ kube-apiserver 收到此类请求时，它可能会返回任意资源版本号�
 
 kube-apiserver 收到此类请求时，它会保证 Cache 中的最新 ResourceVersion 大于等于你传入的 ResourceVersion，然后从 Cache 中查找你请求的资源对象 key，返回数据给 client。基本原理是 kube-apiserver 为各个核心资源（如 Pod）维护了一个 Cache，通过 etcd 的 Watch 机制来实时更新 Cache。当你的 Get 请求中携带了非 0 的 ResourceVersion，它会等待缓存中最新 ResourceVersion 大于等于你 Get 请求中的 ResoureVersion，若满足条件则从 Cache 中查询数据，返回给 client。若不满足条件，它最多等待 3 秒，若超过 3 秒，Cache 中的最新 ResourceVersion 还小于 Get 请求中的 ResourceVersion，就会返回 ResourceVersionTooLarge 错误给 client。  
 
+再看下 watch 请求查询案例中，ResourceVersion 主要有以下这三种取值：   
+
+- 指定 ResourceVersion 默认空字符串  
+
+一方面为了帮助 client 建立初始状态，它会将当前已存在的资源通过 Add 事件返回给 client。另一方面，它会从 etcd 当前版本号开始监听，后续新增写请求导致数据变化时可及时推送给 client。  
+
+- 指定 ResourceVersion="0"  
+
+它同样会帮助 client 建立初始状态，但是它会从任意版本号开始监听，这种场景可能导致集群返回成就的数据。  
+
+- 指定 ResourceVersion 为一个非 0 的字符串
+
+从精确的版本号开始监听数据，它只会返回大于等于精确版本号的变更事件。  
 
 
 
