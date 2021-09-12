@@ -47,4 +47,32 @@ Kubernetes 中的查询方案是由 kube-apiserver 通过范围遍历 etcd 获�
 
 Kubernetes 资源在 etcd 中的存储格式由 prefix + "/" + 资源类型 + "/" + namespace + "/" + 具体资源名组成，基于 etcd 提供的范围查询能力，非常简单地支持了按具体资源名称查询和 namespace 查询。  
 
+#### Resource Version 与 etcd 版本号
+
+Kubernetes 集群中，它提供了什么概念来实现增量监听逻辑呢？  
+
+Resource Version  
+
+Resource Version 是 Kubernetes API 中非常重要的一个概念，顾名思义，它是一个 Kubernetes 资源的内部版本字符串，client 可通过它来判断资源是否发生了变化。同时，你可以在 Get、List、Watch 接口中，通过指定 Resource Version 值来满足你对数据一致性、高性能等诉求。  
+
+下面从 Get 和 Watch 接口中的 Resource Version 参数值为例，来看下和 etcd 的关系  
+
+在 Get 请求查询案例中，ResourceVersion 主要有以下这三种取值： 
+
+- 指定 ResourceVersion 默认空字符串  
+
+kube-apiserver 收到一个此类型的读请求后，它会向 etcd 发出共识读 / 线性读请求获取 etcd 集群最新的数据。  
+
+- 指定 ResourceVersion="0"  
+
+kube-apiserver 收到此类请求时，它可能会返回任意资源版本号的数据，但是优先返回较新版本。一般情况下它直接从 kube-apiserver 缓存中获取数据返回给 client，有可能读到过期的数据，适用于对数据一致性要求不高的场景。  
+
+- 设置 ResourceVersion 为一个非 0 的字符串  
+
+kube-apiserver 收到此类请求时，它会保证 Cache 中的最新 ResourceVersion 大于等于你传入的 ResourceVersion，然后从 Cache 中查找你请求的资源对象 key，返回数据给 client。基本原理是 kube-apiserver 为各个核心资源（如 Pod）维护了一个 Cache，通过 etcd 的 Watch 机制来实时更新 Cache。当你的 Get 请求中携带了非 0 的 ResourceVersion，它会等待缓存中最新 ResourceVersion 大于等于你 Get 请求中的 ResoureVersion，若满足条件则从 Cache 中查询数据，返回给 client。若不满足条件，它最多等待 3 秒，若超过 3 秒，Cache 中的最新 ResourceVersion 还小于 Get 请求中的 ResourceVersion，就会返回 ResourceVersionTooLarge 错误给 client。  
+
+
+
+
+
 
