@@ -1,3 +1,16 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [etcd 中的点](#etcd-%E4%B8%AD%E7%9A%84%E7%82%B9)
+  - [k8s 如何和 etcd 交互](#k8s-%E5%A6%82%E4%BD%95%E5%92%8C-etcd-%E4%BA%A4%E4%BA%92)
+    - [Resource Version 与 etcd 版本号](#resource-version-%E4%B8%8E-etcd-%E7%89%88%E6%9C%AC%E5%8F%B7)
+  - [如何支撑 k8s 中的上万节点](#%E5%A6%82%E4%BD%95%E6%94%AF%E6%92%91-k8s-%E4%B8%AD%E7%9A%84%E4%B8%8A%E4%B8%87%E8%8A%82%E7%82%B9)
+    - [如何减少 expensive request](#%E5%A6%82%E4%BD%95%E5%87%8F%E5%B0%91-expensive-request)
+  - [etcd 中分布式锁对比 redis 的安全性](#etcd-%E4%B8%AD%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E5%AF%B9%E6%AF%94-redis-%E7%9A%84%E5%AE%89%E5%85%A8%E6%80%A7)
+    - [Redis 中分布式锁的缺点](#redis-%E4%B8%AD%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E7%BC%BA%E7%82%B9)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 ## etcd 中的点
 
 ### k8s 如何和 etcd 交互
@@ -85,7 +98,85 @@ kube-apiserver 收到此类请求时，它会保证 Cache 中的最新 ResourceV
 
 从精确的版本号开始监听数据，它只会返回大于等于精确版本号的变更事件。  
 
+### 如何支撑 k8s 中的上万节点
 
+大规模 Kubernetes 集群的外在表现是节点数成千上万，资源对象数量高达几十万。本质是更频繁地查询、写入更大的资源对象。  
 
+当然大量的节点，对于写入和读取都会产生性能的影响  
 
+#### 如何减少 expensive request
+
+- 分页  
+
+- 资源按 namespace 拆分 
+
+- Informer 机制  
+
+Informer 机制的 Reflector 封装了 Watch、List 操作，结合本地 Cache、Indexer，实现了控制器加载完初始状态数据后，接下来的其他操作都只需要从本地缓存读取，极大降低了 kube-apiserver 和 etcd 的压力。  
+
+- Watch bookmark 机制  
+
+Watch bookmark 机制通过新增一个 bookmark 类型的事件来实现的。kube-apiserver 会通过定时器将各类型资源最新的 Resource Version 推送给 kubelet 等 client，在 client 与 kube-apiserver 网络异常重连等场景，大大降低了 client 重建 Watch 的开销，减少了 relist expensive request。  
+
+- 更高效的 Watch 恢复机制  
+
+### etcd 中分布式锁对比 redis 的安全性
+
+**分布式锁的几个核心要素**  
+
+- 第一要素是互斥性、安全性。在同一时间内，不允许多个 client 同时获得锁。  
+
+- 第二个要素就是活性  
+
+在实现分布式锁的过程中要考虑到 client 可能会出现 crash 或者网络分区，你需要原子申请分布式锁及设置锁的自动过期时间，通过过期、超时等机制自动释放锁，避免出现死锁，导致业务中断。  
+
+- 第三个要素是，高性能、高可用。加锁、释放锁的过程性能开销要尽量低，同时要保证高可用，确保业务不会出现中断。  
+
+#### Redis 中分布式锁的缺点
+
+比如主备切换  
+
+比如主节点收到了请求，但是还没有同步到其他节点，然后主节点挂掉了，之后其他节点中有一个节点被选出来变成了主节点，但是刚刚的信息没有同步到，所以客户端的请求过来又会产生信息写入，造成互斥锁被获取到了两次。互斥性和安全性都被破坏掉了。  
+
+主备切换、脑裂是 Redis 分布式锁的两个典型不安全的因素，本质原因是 Redis 为了满足高性能，采用了主备异步复制协议，同时也与负责主备切换的 Redis Sentinel 服务是否合理部署有关。  
+
+对于这种情况，redis 中提供了 RedLock 算法，什么是 RedLock 算法呢？  
+
+它是基于多个独立的 Redis Master 节点的一种实现（一般为 5）。client 依次向各个节点申请锁，若能从多数个节点中申请锁成功并满足一些条件限制，那么 client 就能获取锁成功。  
+
+它通过独立的 N 个 Master 节点，避免了使用主备异步复制协议的缺陷，只要多数 Redis 节点正常就能正常工作，显著提升了分布式锁的安全性、可用性。  
+
+#### 使用 etcd 作为分布式锁的优点  
+
+**事务与锁的安全性** 
+
+相比 Redis 基于主备异步复制导致锁的安全性问题，etcd 是基于 Raft 共识算法实现的，一个写请求需要经过集群多数节点确认。因此一旦分布式锁申请返回给 client 成功后，它一定是持久化到了集群多数节点上，不会出现 Redis 主备异步复制可能导致丢数据的问题，具备更高的安全性。  
+
+**Lease 与锁的活性**
+
+Lease 活动检测机制，client 需定期向 etcd 服务发送"特殊心跳"汇报健康状态，若你未正常发送心跳，并超过和 etcd 服务约定的最大存活时间后，就会被 etcd 服务移除此 Lease 和其关联的数据。  
+
+**Watch 与锁的可用性**
+
+Watch 提供了高效的数据监听能力。当其他 client 收到 Watch Delete 事件后，就可快速判断自己是否有资格获得锁，极大减少了锁的不可用时间。  
+
+**etcd 自带的 concurrency 包**
+
+etcd 社区提供了一个名为 concurrency 包帮助你更简单、正确地使用分布式锁、分布式选举。  
+
+核心流程  
+
+- 首先通过 concurrency.NewSession 方法创建 Session，本质是创建了一个 TTL 为 10 的 Lease。  
+
+- 其次得到 session 对象后，通过 concurrency.NewMutex 创建了一个 mutex 对象，包含 Lease、key prefix 等信息。  
+
+- 然后通过 mutex 对象的 Lock 方法尝试获取锁。  
+
+- 最后使用结束，可通过 mutex 对象的 Unlock 方法释放锁。  
+
+通过多个 concurrency 创建 prefix 相同，名称不一样的 key，哪个 key 的 revision 最小，最终就是它获得锁  
+
+那未获得锁的 client 是如何等待的呢?  
+
+答案是通过 Watch 机制各自监听 prefix 相同，revision 比自己小的 key，因为只有 revision 比自己小的 key 释放锁，我才能有机会，获得锁。  
 
