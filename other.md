@@ -8,6 +8,7 @@
     - [如何减少 expensive request](#%E5%A6%82%E4%BD%95%E5%87%8F%E5%B0%91-expensive-request)
   - [etcd 中分布式锁对比 redis 的安全性](#etcd-%E4%B8%AD%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E5%AF%B9%E6%AF%94-redis-%E7%9A%84%E5%AE%89%E5%85%A8%E6%80%A7)
     - [Redis 中分布式锁的缺点](#redis-%E4%B8%AD%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E7%BC%BA%E7%82%B9)
+    - [使用 etcd 作为分布式锁的优点](#%E4%BD%BF%E7%94%A8-etcd-%E4%BD%9C%E4%B8%BA%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E7%9A%84%E4%BC%98%E7%82%B9)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
