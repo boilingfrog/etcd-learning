@@ -34,6 +34,8 @@ etcd的特点
 
 - 可靠：使用Raft算法实现了强一致、高可用的服务存储目录  
 
+etcd 是基于 raft 算法实现的，具体的实现可参见[etcd实现raft源码解读](https://www.cnblogs.com/ricklz/p/15155095.html)
+
 ### Consul
 
 先放一张 consul 的架构图  
@@ -76,6 +78,11 @@ ZooKeeper 是一个典型的分布式数据一致性解决方案，分布式应�
 
 - 可靠性： 一旦一次更改请求被应用，更改的结果就会被持久化，直到被下一次更改覆盖。
 
+里看下 ZooKeeper 的架构图，图片摘自[etcd实战课](https://time.geekbang.org/column/article/351898)  
+
+<img src="/img/zookeeper.webp" alt="etcd" align=center/>  
+
+ZooKeeper 集群中的所有机器通过一个 Leader 选举过程来选定一台称为 “Leader” 的机器，Leader 既可以为客户端提供写服务又能提供读服务。除了 Leader 外，Follower 和 Observer 都只能提供读服务。Follower 和 Observer 唯一的区别在于 Observer 机器不参与 Leader 的选举过程，也不参与写操作的“过半写成功”策略，因此 Observer 机器可以在不影响写性能的情况下提升集群的读性能。  
 
 
 ### 参考 
