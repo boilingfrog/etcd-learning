@@ -19,6 +19,9 @@
 
 [etcd学习(9)-etcd中的存储实现](https://www.cnblogs.com/ricklz/p/15253404.html)     
 
+[etcd学习(10)-etcd对比Consul和zooKeeper如何选型](https://www.cnblogs.com/ricklz/p/15292306.html)     
+
+
  
 
  

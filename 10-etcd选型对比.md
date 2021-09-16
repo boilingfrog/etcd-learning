@@ -157,3 +157,4 @@ ZooKeeper 在 Java 业务中选型使用的较多，etcd 因为是 go 语言开�
 【23 | 选型：etcd/ZooKeeper/Consul等我们该如何选择？】https://time.geekbang.org/column/article/351898  
 【服务发现比较】https://developer.aliyun.com/article/759139  
 【ZooKeeper讲解】https://juejin.cn/post/6844903677367418893  
+【ETCD对比Consul和zooKeeper如何选型】https://boilingfrog.github.io/2021/09/16/etcd%E5%AF%B9%E6%AF%94consul%E5%92%8CzooKeeper/  
