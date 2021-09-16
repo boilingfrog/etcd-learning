@@ -3,9 +3,12 @@
 
 - [etcd选型对比](#etcd%E9%80%89%E5%9E%8B%E5%AF%B9%E6%AF%94)
   - [前言](#%E5%89%8D%E8%A8%80)
-  - [etcd](#etcd)
-  - [Consul](#consul)
-  - [ZooKeeper](#zookeeper)
+  - [基本架构和原理](#%E5%9F%BA%E6%9C%AC%E6%9E%B6%E6%9E%84%E5%92%8C%E5%8E%9F%E7%90%86)
+    - [etcd](#etcd)
+    - [Consul](#consul)
+    - [ZooKeeper](#zookeeper)
+  - [选型对比](#%E9%80%89%E5%9E%8B%E5%AF%B9%E6%AF%94)
+  - [总结](#%E6%80%BB%E7%BB%93)
   - [参考](#%E5%8F%82%E8%80%83)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -16,7 +19,9 @@
 
 对比 Consul, ZooKeeper。选型etcd有那些好处呢？  
 
-### etcd
+### 基本架构和原理
+
+#### etcd
 
 ETCD是一个分布式、可靠的key-value存储的分布式系统，用于存储分布式系统中的关键数据；当然，它不仅仅用于存储，还提供配置共享及服务发现；基于Go语言实现 。  
 
@@ -36,7 +41,7 @@ etcd的特点
 
 etcd 是基于 raft 算法实现的，具体的实现可参见[etcd实现raft源码解读](https://www.cnblogs.com/ricklz/p/15155095.html)
 
-### Consul
+#### Consul
 
 先放一张 consul 的架构图  
 
@@ -66,7 +71,7 @@ Consul 支持以下三种模式的读请求：
 
 - 弱一致性（stale)。任何节点都可以读，无论它是否 Leader。可能读取到陈旧的数据，类似 etcd 的串行读。这种读模式不要求集群有 Leader，因此当集群不可用时，只要有节点存活，它依然可以响应读请求。  
 
-### ZooKeeper
+#### ZooKeeper
 
 ZooKeeper 是一个典型的分布式数据一致性解决方案，分布式应用程序可以基于 ZooKeeper 实现诸如数据发布/订阅、负载均衡、命名服务、分布式协调/通知、集群管理、Master 选举、分布式锁和分布式队列等功能。  
 
@@ -114,15 +119,37 @@ Zab 协议可以分为以下阶段：
 
 当准 Leader 将自身最新数据复制给其他落后的节点，并告知其他节点自己正式当选为 Leader。这时候就可以进入广播模式，当有客户端进行数据写入操作的时候，就可以通过广播模式通知所有的 follower 了。   
 
+当集群中已经有过半的Follower服务器完成了和Leader服务器的状态同步，那么整个服务框架就可以进人消息广播模式了。  
 
+### 选型对比
 
+- 1、并发原语：etcd 和 ZooKeeper 并未提供原生的分布式锁、Leader 选举支持，只提供了核心的基本数据读写、并发控制 API，由应用上层去封装，consul 就简单多了，提供了原生的支持，通过简单点命令就能使用；  
 
+- 2、服务发现：etcd 和 ZooKeeper 并未提供原生的服务发现支持，Consul 在服务发现方面做了很多解放用户双手的工作，提供了服务发现的框架，帮助你的业务快速接入，并提供了 HTTP 和 DNS 两种获取服务方式；  
 
+- 3、健康检查：consul 的健康检查机制，是一种基于 client、Gossip 协议、分布式的健康检查机制，具备低延时、可扩展的特点。业务可通过 Consul 的健康检查机制，实现 HTTP 接口返回码、内存乃至磁盘空间的检测，相比 etcd、ZooKeeper 它们提供的健康检查机制和能力就非常有限了；  
 
+etcd 提供了 Lease 机制来实现活性检测。它是一种中心化的健康检查，依赖用户不断地发送心跳续租、更新 TTL  
 
+ZooKeeper 使用的是一种名为临时节点的状态来实现健康检查。当 client 与 ZooKeeper 节点连接断掉时，ZooKeeper 就会删除此临时节点的 key-value 数据。它比基于心跳机制更复杂，也给 client 带去了更多的复杂性，所有 client 必须维持与 ZooKeeper server 的活跃连接并保持存活。  
 
+- 4、watch 特性：相比于 etcd , Consul 存储引擎是基于Radix Tree实现的，因此它不支持范围查询和监听，只支持前缀查询和监听，而 etcd 都支持, ZooKeeper 的 Watch 特性有更多的局限性，它是个一次性触发器;  
 
+- 5、线性读。etcd 和 Consul 都支持线性读，而 ZooKeeper 并不具备。  
 
+- 6、权限机制比较。etcd 实现了 RBAC 的权限校验，而 ZooKeeper 和 Consul 实现的 ACL。  
+
+- 7、事务比较。etcd 和 Consul 都提供了简易的事务能力，支持对字段进行比较，而 ZooKeeper 只提供了版本号检查能力，功能较弱。  
+
+- 8、多数据中心。在多数据中心支持上，只有 Consul 是天然支持的，虽然它本身不支持数据自动跨数据中心同步，但是它提供的服务发现机制、Prepared Query功能，赋予了业务在一个可用区后端实例故障时，可将请求转发到最近的数据中心实例。而 etcd 和 ZooKeeper 并不支持。  
+
+### 总结
+
+总的看下来，consul 提供了原生的分布式锁、健康检查、服务发现机制支持，让业务可以更省心，同时也对多数据中心进行了支持；  
+
+当然 etcd 和 ZooKeeper 也都有相应的库，也能很好的进行支持，但是这两者不支持多数据中心；  
+
+ZooKeeper 在 Java 业务中选型使用的较多，etcd 因为是 go 语言开发的，所以如果本身就是 go 的技术栈，使用这个也是个不错的选择，Consul 在国外应用比较多，中文文档及实践案例相比 etcd 较少；   
 
 ### 参考 
 
