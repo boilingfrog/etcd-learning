@@ -481,7 +481,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer cli.Close()
-
+	ctx := context.Background()
 	// m1来抢锁
 	go func() {
 		s1, err := concurrency.NewSession(cli)
@@ -492,7 +492,7 @@ func main() {
 		m1 := concurrency.NewMutex(s1, "/my-lock/")
 
 		// acquire lock for s1
-		if err := m1.Lock(context.TODO()); err != nil {
+		if err := m1.Lock(ctx); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println("m1---获得了锁")
@@ -500,7 +500,7 @@ func main() {
 		time.Sleep(time.Second * 3)
 
 		// 释放锁
-		if err := m1.Unlock(context.TODO()); err != nil {
+		if err := m1.Unlock(ctx); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println("m1++释放了锁")
@@ -514,7 +514,7 @@ func main() {
 		}
 		defer s2.Close()
 		m2 := concurrency.NewMutex(s2, "/my-lock/")
-		if err := m2.Lock(context.TODO()); err != nil {
+		if err := m2.Lock(ctx); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println("m2---获得了锁")
@@ -523,7 +523,7 @@ func main() {
 		time.Sleep(time.Second * 3)
 
 		// 释放锁
-		if err := m2.Unlock(context.TODO()); err != nil {
+		if err := m2.Unlock(ctx); err != nil {
 			log.Fatal(err)
 		}
 
@@ -532,6 +532,7 @@ func main() {
 
 	time.Sleep(time.Second * 10)
 }
+
 ```
 
 打印下输出
