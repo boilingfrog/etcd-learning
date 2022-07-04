@@ -56,7 +56,7 @@ type Lessor interface {
 ```go
 // etcd/client/v3/lease.go
 type Lease interface {
-	// Grant 表示创建一个 TTL 为你指定秒数的 Lease，Lessor 会将 Lease 信息持久化存储在 boltdb 中；
+	// Grant 表示创建一个 TTL 为你指定秒数的 Lease，server 端的 Lessor 会将 Lease 信息持久化存储在 boltdb 中；
 	Grant(ctx context.Context, ttl int64) (*LeaseGrantResponse, error)
 
 	// 表示撤销 Lease 并删除其关联的数据；
